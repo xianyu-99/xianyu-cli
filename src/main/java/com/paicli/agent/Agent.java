@@ -24,6 +24,8 @@ import java.util.Map;
  * Agent 核心类 - 实现 ReAct 循环
  */
 public class Agent {
+
+    
     private static final Logger log = LoggerFactory.getLogger(Agent.class);
     private LlmClient llmClient;
     private final ToolRegistry toolRegistry;
