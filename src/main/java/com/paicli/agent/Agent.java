@@ -25,8 +25,9 @@ import java.util.Map;
  */
 public class Agent {
 
-    
+
     private static final Logger log = LoggerFactory.getLogger(Agent.class);
+    
     private LlmClient llmClient;
     private final ToolRegistry toolRegistry;
     private final List<LlmClient.Message> conversationHistory;
