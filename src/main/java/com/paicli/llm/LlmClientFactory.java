@@ -17,9 +17,12 @@ public class LlmClientFactory {
 
         String model = config.getModel(normalized);
 
+        String baseUrl = config.getBaseUrl(normalized);
+
         return switch (normalized) {
             case "glm" -> new GLMClient(apiKey, model);
             case "deepseek" -> new DeepSeekClient(apiKey, model);
+            case "anthropic" -> new AnthropicClient(baseUrl, apiKey, model);
             default -> null;
         };
     }
@@ -30,7 +33,7 @@ public class LlmClientFactory {
             return client;
         }
 
-        for (String provider : new String[]{"glm", "deepseek"}) {
+        for (String provider : new String[]{"anthropic", "glm", "deepseek"}) {
             client = create(provider, config);
             if (client != null) {
                 return client;
