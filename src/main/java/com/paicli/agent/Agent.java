@@ -85,8 +85,9 @@ public class Agent {
             12. browser_type - 输入文本，参数：{"selector": "css选择器", "text": "内容", "submit": false}
             13. browser_evaluate - 执行 JavaScript，参数：{"script": "document.title"}
             14. browser_get_dom - 获取页面文本内容，参数：{"selector": "css选择器", "max_length": 8000}
-            15. browser_close - 关闭浏览器
-            16. mcp__{server}__{tool} - MCP server 动态提供的外部工具，具体参数以工具 schema 为准
+            15. browser_tab - 管理标签页，参数：{"action": "list/switch/new/close", "target_id": "...", "url": "..."}
+            16. browser_close - 关闭浏览器
+            17. mcp__{server}__{tool} - MCP server 动态提供的外部工具，具体参数以工具 schema 为准
 
             当需要操作文件、执行命令或创建项目时，请使用工具调用。
             使用工具后，根据工具返回的结果继续思考下一步行动。
@@ -109,7 +110,14 @@ public class Agent {
             - 已经有具体 URL → 直接 web_fetch，不要再 web_search 一次
             - web_fetch 拿到空正文（提示 SPA / 防爬墙）→ 换用 browser_navigate + browser_get_dom 获取 JS 渲染后的内容
             - 需要点击、输入、截图等交互操作 → browser_navigate 打开页面，再用 browser_click / browser_type / browser_screenshot
+            - 需要访问已登录页面（如 GitHub 个人页面、内部系统）→ 优先连接用户已有的 Chrome 实例（复用登录态），否则启动新实例
+            - 多页面任务 → 用 browser_tab 管理标签页（list 查看 / switch 切换 / new 新建 / close 关闭）
             - 浏览器工具使用完后，调用 browser_close 释放资源
+
+            浏览器登录态安全约束：
+            - 访问银行、支付、证券等敏感页面时，会在 HITL 审批中额外提示风险
+            - 不要在未经用户明确同意的情况下操作涉及资金、个人隐私的页面
+            - 操作完成后建议关闭浏览器，避免会话残留
 
             如果提供了相关记忆，请参考其中的信息来辅助决策。
             %s

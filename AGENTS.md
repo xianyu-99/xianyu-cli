@@ -25,9 +25,9 @@
 
 - 项目名：`PaiCLI`
 - 定位：一个面向商业使用的 Java Agent CLI 产品，对标 Claude Code，从最初的 ReAct 循环持续演进到完整 Agent 产品形态
-- 当前主线：主线规划 16 期。已完成第 1 期 `ReAct`、第 2 期 `Plan-and-Execute + DAG`、第 3 期 `Memory + 上下文工程`、第 4 期 `RAG 检索 + 代码库理解`、第 5 期 `Multi-Agent 协作 + 角色分工`、第 6 期 `HITL 人工审批 + 危险操作拦截`（含 HITL 增强：路径围栏 / 命令快速拒绝 / 操作审计）、第 7 期 `异步执行 + 并行工具调用`、第 8 期 `多模型适配 + 运行时切换`、第 9 期 `联网能力 + Web 工具`、第 10 期 `MCP 协议核心（stdio + Streamable HTTP）`、第 11 期 `MCP 高级能力首批（resources 双轨 + prompts 查看 + 被动通知）`、第 12 期 `长上下文工程`、第 13 期 `Chrome DevTools MCP`
-- 下一步：第 14 期 `CDP 会话复用`、第 15 期 `Skill 系统`、第 16 期 `TUI 产品化`；OAuth / sampling / recovery 作为后续 MCP 增强
-- 当前用户可感知版本：CLI Banner 显示 `v13.0.0`
+- 当前主线：主线规划 16 期。已完成第 1 期 `ReAct`、第 2 期 `Plan-and-Execute + DAG`、第 3 期 `Memory + 上下文工程`、第 4 期 `RAG 检索 + 代码库理解`、第 5 期 `Multi-Agent 协作 + 角色分工`、第 6 期 `HITL 人工审批 + 危险操作拦截`（含 HITL 增强：路径围栏 / 命令快速拒绝 / 操作审计）、第 7 期 `异步执行 + 并行工具调用`、第 8 期 `多模型适配 + 运行时切换`、第 9 期 `联网能力 + Web 工具`、第 10 期 `MCP 协议核心（stdio + Streamable HTTP）`、第 11 期 `MCP 高级能力首批（resources 双轨 + prompts 查看 + 被动通知）`、第 12 期 `长上下文工程`、第 13 期 `Chrome DevTools MCP`、第 14 期 `CDP 会话复用 + 登录态访问`
+- 下一步：第 15 期 `Skill 系统`、第 16 期 `TUI 产品化`；OAuth / sampling / recovery 作为后续 MCP 增强
+- 当前用户可感知版本：CLI Banner 显示 `v14.0.0`
 - 当前 Maven 产物版本：`pom.xml` 仍是 `1.0-SNAPSHOT`
 - 结论：如果你看到运行界面是 `v11.0.0`，但 Jar 名仍是 `paicli-1.0-SNAPSHOT.jar`，这是当前仓库的真实状态，不是你看错
 
@@ -521,7 +521,7 @@ src/main/java/com/paicli
 
 ### `src/main/java/com/paicli/tool/ToolRegistry.java`
 
-当前内置工具有 15 个：
+当前内置工具有 16 个：
 
 - `read_file`
 - `write_file`
@@ -531,12 +531,13 @@ src/main/java/com/paicli
 - `search_code`
 - `web_search`（通过 `SearchProvider` 抽象，支持 zhipu / serpapi / searxng 三种实现；provider 未就绪时返回引导提示而非抛错）
 - `web_fetch`（抓取 URL → 提取正文 → Markdown，本地实现；遇 SPA/防爬墙返回空正文 + 边界提示）
-- `browser_navigate`（打开网页，支持 JS 渲染；首次使用时自动启动 Chrome）
+- `browser_navigate`（打开网页，支持 JS 渲染；优先连接已有 Chrome 实例，否则自动启动）
 - `browser_screenshot`（页面/元素截图，保存 PNG）
 - `browser_click`（CSS 选择器点击元素）
 - `browser_type`（输入文本，可选提交）
 - `browser_evaluate`（执行 JavaScript）
 - `browser_get_dom`（获取页面文本内容）
+- `browser_tab`（获取标签页列表 / 切换 / 创建 / 关闭）
 - `browser_close`（关闭浏览器释放资源）
 
 另外会动态注册 MCP 工具：
@@ -582,9 +583,10 @@ src/main/java/com/paicli
 - 持久化后台任务队列 / 跨会话异步长任务调度
 - 容器 / VM 沙箱：本地 Agent CLI 默认不做容器隔离（参考 Claude Code / Cursor / Aider）；想做隔离请参考 ROADMAP 末尾「Pro 升级版本」或自行实现 `SandboxDriver` 接口
 - Chrome DevTools MCP 已知边界：
-  - 需要本地安装 Chrome/Chromium（自动查找系统安装）
+  - 需要本地安装 Chrome/Chromium（自动查找系统安装，Windows/macOS/Linux 均支持，Edge 兜底）
   - 无头模式下部分网站可能有反爬检测
-  - 复用已有 Chrome 实例（第 14 期）尚未实现
+  - 复用已有 Chrome 实例需用户手动在 `--remote-debugging-port=9222` 上启动；程序会自动探测并优先复用
+  - 登录态复用不隔离：复用的是用户默认 profile，如需隔离请额外启动带独立 `--user-data-dir` 的实例
 - MCP 后续高级能力：OAuth、`sampling/createMessage`、server 自动重启、prompts 注入对话、resources 自动注入 system prompt
 - TUI 产品化界面
 

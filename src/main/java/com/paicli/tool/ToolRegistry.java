@@ -367,6 +367,17 @@ public class ToolRegistry {
                 args -> browserToolProvider.getDom(args)
         ));
 
+        tools.put("browser_tab", new Tool(
+                "browser_tab",
+                "管理浏览器标签页：列出、切换、新建、关闭。",
+                createParameters(
+                        new Param("action", "string", "操作类型：list（列出）/ switch（切换）/ new（新建）/ close（关闭）", true),
+                        new Param("target_id", "string", "标签页 ID（switch/close 时需要）", false),
+                        new Param("url", "string", "新标签页 URL（new 时可选，默认 about:blank）", false)
+                ),
+                args -> browserToolProvider.tab(args)
+        ));
+
         tools.put("browser_close", new Tool(
                 "browser_close",
                 "关闭浏览器进程，释放资源。",
@@ -819,6 +830,19 @@ public class ToolRegistry {
         } catch (TimeoutException e) {
             outputFuture.cancel(true);
             return "(命令已结束，但输出读取超时)";
+        }
+    }
+
+    public String getBrowserStatus() {
+        if (browserToolProvider == null) {
+            return "浏览器工具未初始化";
+        }
+        return browserToolProvider.getBrowserStatus();
+    }
+
+    public void closeBrowser() {
+        if (browserToolProvider != null) {
+            browserToolProvider.close();
         }
     }
 

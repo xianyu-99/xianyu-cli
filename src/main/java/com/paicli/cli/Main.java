@@ -47,13 +47,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * PaiCLI v11.0.0 - MCP-Native Agent CLI
- * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换、MCP
- * 第 11 期新增：MCP resources 双轨、@-mention resource 引用、prompts 查看、被动通知处理、运行中取消
+ * PaiCLI v14.0.0 - MCP-Native Agent CLI
+ * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换、MCP、浏览器自动化
+ * 第 14 期新增：CDP 会话复用、多 Tab 管理、登录态访问、/browser CLI 命令
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.paicli.policy
  */
 public class Main {
-    private static final String VERSION = "11.0.0";
+    private static final String VERSION = "14.0.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "paicli.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "paicli.log.level";
@@ -188,7 +188,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /clear /context /memory /memory clear /save /index /search /graph /exit\n");
                         continue;
                     }
                     case EXIT -> {
@@ -208,6 +208,11 @@ public class Main {
                     case CONTEXT_STATUS -> {
                         System.out.println("📋 上下文状态：");
                         System.out.println(reactAgent.getContextStatus());
+                        System.out.println();
+                        continue;
+                    }
+                    case BROWSER_STATUS -> {
+                        System.out.println(reactAgent.getToolRegistry().getBrowserStatus());
                         System.out.println();
                         continue;
                     }
@@ -804,6 +809,7 @@ public class Main {
                 "在普通任务里输入 '@server:protocol://path' 可显式引用 MCP resource",
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
+                "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
                 "输入 '/graph <类名>' 查看代码关系图谱",

@@ -234,6 +234,14 @@
 - 📊 浏览器操作纳入审计日志
 - 🔄 与 `web_fetch` 分工：静态页面用 `web_fetch`，JS 渲染 / 交互用浏览器工具
 
+### 第十四期
+
+- 🔗 CDP 会话复用：优先连接用户已有 Chrome 实例（`--remote-debugging-port=9222`），复用登录态访问需认证页面
+- 📑 多标签页管理：`browser_tab` 工具支持 list（列出）/ switch（切换）/ new（新建）/ close（关闭）
+- 🌐 登录态访问：访问 GitHub、内部系统等已登录页面无需重新认证
+- 🛡️ 安全约束：Agent 提示词明确敏感页面（银行/支付）操作限制
+- 📊 `/browser` CLI 命令：查看浏览器连接状态和标签页列表
+
 ## 快速开始
 
 ### 1. 配置 API Key
@@ -459,6 +467,7 @@ I
 - `/mcp prompts <name>` - 查看 MCP server 暴露的 prompts（只查看，不注入对话）
 - `/policy` - 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限 / 审计目录）
 - `/audit [N]` - 查看今日最近 N 条危险工具审计记录（默认 10）
+- `/browser` - 查看浏览器连接状态和标签页列表
 - `/context` / `/ctx` - 查看上下文状态（窗口占用率 / 模式 / 缓存命中 / MCP resources）
 - `/memory` / `/mem` - 查看记忆系统状态
 - `/memory clear` - 清空长期记忆

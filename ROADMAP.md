@@ -342,22 +342,29 @@
 
 ---
 
-## 第14期：CDP 会话复用 + 登录态访问
+## 第14期：CDP 会话复用 + 登录态访问 ✅
+
+**已完成**
 
 **前置依赖**：第13期 Chrome DevTools MCP 已能驱动浏览器
 
 **目标**：让 Agent 复用用户已登录的 Chrome 实例，访问需要认证的页面
 
 **功能迭代**：
-- 通过 `--remote-debugging-port` 连接用户已打开的 Chrome 实例
-- 复用现有登录态访问 GitHub、内部系统等需认证页面
-- 多 Tab / 多上下文管理
-- 登录态访问的安全约束（敏感页面识别、操作前 HITL 审批）
+- `BrowserToolProvider` 优先连接 `--remote-debugging-port=9222` 上的现有 Chrome 实例，复用用户已有登录态
+- 无现有实例时自动启动新的 headless Chrome（带 `--headless=new` 和 `--no-first-run`）
+- 多 Tab 管理（8 个浏览器工具 → 16 个内置工具）：
+  - `browser_tab` - 获取标签页列表 / 切换 / 创建 / 关闭（统一工具，通过 action 参数区分）
+- CDP Target Domain 封装：`getTabs()`、`switchToTab()`、`createTab()`、`closeTab()`、`TabInfo` record
+- 登录态访问的安全约束：敏感页面（含 `login`、`signin`、`auth`、`password`、`bank`、`pay`、`credit` 等关键词的 URL）在 Agent 提示词中明确列为需用户知情
+- HITL 集成：`browser_navigate`、`browser_click`、`browser_type` 与原有 3 个危险工具一起纳入审批（共 6 个中高危工具）
+- AuditLog：浏览器操作继续纳入审计
+- CLI：`/browser` 命令查看当前浏览器连接状态与标签页列表
 
 **核心知识点**：
-- Chrome 远程调试端口工作机制
-- 登录态复用与隔离
-- 认证页面的安全策略
+- Chrome 远程调试端口工作机制（HTTP /json/list /json/version + WebSocket）
+- 登录态复用与隔离：复用已有 user data profile，不隔离；如需隔离需额外启动带独立 `--user-data-dir` 的实例
+- 认证页面的安全策略：HITL + URL 关键词识别 + Agent 提示词约束
 
 **教程标题候选**：《要登录才能看？让 Agent 复用你已登录的 Chrome，省掉重新登录的麻烦》
 

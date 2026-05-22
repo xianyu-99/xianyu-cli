@@ -196,6 +196,59 @@ public class BrowserToolProvider {
     }
 
     /**
+     * browser_tab: 管理标签页。
+     */
+    public String tab(Map<String, String> args) {
+        try {
+            String action = args.getOrDefault("action", "list");
+            CdpSession s = ensureSession();
+
+            return switch (action) {
+                case "list" -> {
+                    var tabs = s.getTabs();
+                    if (tabs.isEmpty()) {
+                        yield "当前没有打开的标签页";
+                    }
+                    StringBuilder sb = new StringBuilder("📑 标签页列表:\n");
+                    for (int i = 0; i < tabs.size(); i++) {
+                        CdpSession.TabInfo t = tabs.get(i);
+                        sb.append(String.format("%d. %s%s\n   %s\n",
+                                i + 1,
+                                t.attached() ? "● " : "○ ",
+                                t.title(),
+                                t.url()));
+                    }
+                    yield sb.toString().trim();
+                }
+                case "switch" -> {
+                    String targetId = args.get("target_id");
+                    if (targetId == null || targetId.isBlank()) {
+                        yield "错误：switch 操作需要 target_id 参数";
+                    }
+                    s.switchToTab(targetId);
+                    yield "✅ 已切换到标签页: " + targetId;
+                }
+                case "new" -> {
+                    String url = args.getOrDefault("url", "about:blank");
+                    String newId = s.createTab(url);
+                    yield "✅ 已创建新标签页: " + newId + " (" + url + ")";
+                }
+                case "close" -> {
+                    String targetId = args.get("target_id");
+                    if (targetId == null || targetId.isBlank()) {
+                        yield "错误：close 操作需要 target_id 参数";
+                    }
+                    s.closeTab(targetId);
+                    yield "✅ 已关闭标签页: " + targetId;
+                }
+                default -> "错误：未知 action '" + action + "'，支持 list/switch/new/close";
+            };
+        } catch (Exception e) {
+            return "❌ 标签页操作失败: " + e.getMessage();
+        }
+    }
+
+    /**
      * browser_close: 关闭浏览器。
      */
     public String closeBrowser(Map<String, String> args) {
@@ -205,5 +258,26 @@ public class BrowserToolProvider {
 
     public boolean isBrowserOpen() {
         return session != null && wsClient != null && wsClient.isConnected();
+    }
+
+    public String getBrowserStatus() {
+        if (!isBrowserOpen()) {
+            return "浏览器未连接";
+        }
+        try {
+            var tabs = session.getTabs();
+            StringBuilder sb = new StringBuilder("🌐 浏览器状态: 已连接\n");
+            sb.append("📑 标签页数: ").append(tabs.size()).append("\n");
+            for (int i = 0; i < Math.min(tabs.size(), 5); i++) {
+                CdpSession.TabInfo t = tabs.get(i);
+                sb.append(String.format("   %d. %s%s\n", i + 1, t.attached() ? "● " : "○ ", t.title()));
+            }
+            if (tabs.size() > 5) {
+                sb.append("   ... 共 ").append(tabs.size()).append(" 个标签页\n");
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            return "浏览器已连接，但获取状态失败: " + e.getMessage();
+        }
     }
 }

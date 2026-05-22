@@ -27,7 +27,8 @@ final class CliCommandParser {
         MCP_DISABLE,
         MCP_ENABLE,
         MCP_RESOURCES,
-        MCP_PROMPTS
+        MCP_PROMPTS,
+        BROWSER_STATUS
     }
 
     record ParsedCommand(CommandType type, String payload) {
@@ -182,6 +183,10 @@ final class CliCommandParser {
 
         if (trimmed.regionMatches(true, 0, "/mcp enable ", 0, 12)) {
             return new ParsedCommand(CommandType.MCP_ENABLE, trimmed.substring(12).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/browser")) {
+            return new ParsedCommand(CommandType.BROWSER_STATUS, null);
         }
 
         if (trimmed.startsWith("/")) {

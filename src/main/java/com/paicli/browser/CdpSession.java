@@ -250,7 +250,59 @@ public class CdpSession {
         client.sendSync("Input.dispatchKeyEvent", params);
     }
 
+    // ---- Target Domain (Tab Management) ----
+
+    /**
+     * 获取所有标签页列表。
+     */
+    public java.util.List<TabInfo> getTabs() throws Exception {
+        JsonNode result = client.sendSync("Target.getTargets", null);
+        JsonNode targets = result.path("targetInfos");
+        java.util.List<TabInfo> tabs = new java.util.ArrayList<>();
+        for (JsonNode t : targets) {
+            if ("page".equals(t.path("type").asText())) {
+                tabs.add(new TabInfo(
+                    t.path("targetId").asText(),
+                    t.path("title").asText(""),
+                    t.path("url").asText(""),
+                    t.path("attached").asBoolean(false)
+                ));
+            }
+        }
+        return tabs;
+    }
+
+    /**
+     * 切换到指定标签页。
+     */
+    public void switchToTab(String targetId) throws Exception {
+        ObjectNode params = mapper.createObjectNode();
+        params.put("targetId", targetId);
+        client.sendSync("Target.activateTarget", params);
+    }
+
+    /**
+     * 创建新标签页。
+     */
+    public String createTab(String url) throws Exception {
+        ObjectNode params = mapper.createObjectNode();
+        params.put("url", url != null ? url : "about:blank");
+        JsonNode result = client.sendSync("Target.createTarget", params);
+        return result.path("targetId").asText();
+    }
+
+    /**
+     * 关闭指定标签页。
+     */
+    public void closeTab(String targetId) throws Exception {
+        ObjectNode params = mapper.createObjectNode();
+        params.put("targetId", targetId);
+        client.sendSync("Target.closeTarget", params);
+    }
+
     public CdpWebSocketClient getClient() {
         return client;
     }
+
+    public record TabInfo(String targetId, String title, String url, boolean attached) {}
 }
