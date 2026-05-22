@@ -79,7 +79,14 @@ public class Agent {
             6. search_code - 语义检索代码库，参数：{"query": "自然语言描述", "top_k": %d}
             7. web_search - 搜索互联网获取实时信息（最新版本、官方文档、技术资讯等），参数：{"query": "搜索关键词", "top_k": 5}
             8. web_fetch - 抓取已知 URL 并返回正文 Markdown，参数：{"url": "https://...", "max_chars": 8000}
-            9. mcp__{server}__{tool} - MCP server 动态提供的外部工具，具体参数以工具 schema 为准
+            9. browser_navigate - 打开网页（支持 JS 渲染），参数：{"url": "https://...", "wait_for_load": true}
+            10. browser_screenshot - 页面截图，参数：{"selector": "css选择器", "full_page": false}
+            11. browser_click - 点击页面元素，参数：{"selector": "css选择器"}
+            12. browser_type - 输入文本，参数：{"selector": "css选择器", "text": "内容", "submit": false}
+            13. browser_evaluate - 执行 JavaScript，参数：{"script": "document.title"}
+            14. browser_get_dom - 获取页面文本内容，参数：{"selector": "css选择器", "max_length": 8000}
+            15. browser_close - 关闭浏览器
+            16. mcp__{server}__{tool} - MCP server 动态提供的外部工具，具体参数以工具 schema 为准
 
             当需要操作文件、执行命令或创建项目时，请使用工具调用。
             使用工具后，根据工具返回的结果继续思考下一步行动。
@@ -100,7 +107,9 @@ public class Agent {
             - 训练数据已知的稳定知识（语法、稳定 API、基础概念）→ 直接回答，不要联网
             - 时效性 / 最新信息 / 不确定的事实 → web_search 找入口，找到 URL 后再 web_fetch 拿全文
             - 已经有具体 URL → 直接 web_fetch，不要再 web_search 一次
-            - web_fetch 拿到空正文（提示 SPA / 防爬墙）→ 这是已知边界，告知用户即可，不要反复重试
+            - web_fetch 拿到空正文（提示 SPA / 防爬墙）→ 换用 browser_navigate + browser_get_dom 获取 JS 渲染后的内容
+            - 需要点击、输入、截图等交互操作 → browser_navigate 打开页面，再用 browser_click / browser_type / browser_screenshot
+            - 浏览器工具使用完后，调用 browser_close 释放资源
 
             如果提供了相关记忆，请参考其中的信息来辅助决策。
             %s

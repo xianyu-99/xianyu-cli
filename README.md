@@ -219,6 +219,21 @@
 - 📋 `/context` 命令扩展：显示窗口占用率、上下文模式（long/short）、缓存命中、Prompt Caching 支持状态
 - 🔗 MCP resources 自动注入：长模式下，所有 server 已知 resources 的 URI + 描述自动写入 system prompt，LLM 可直接判断引用
 
+### 第十三期
+
+- 🌐 浏览器操控工具（Chrome DevTools Protocol）：
+  - `browser_navigate` - 打开网页，支持 JS 渲染页面
+  - `browser_screenshot` - 页面/元素截图
+  - `browser_click` - 点击页面元素
+  - `browser_type` - 输入文本
+  - `browser_evaluate` - 执行 JavaScript
+  - `browser_get_dom` - 获取页面文本内容
+  - `browser_close` - 关闭浏览器
+- 🔌 手写 CDP 协议栈：零额外依赖，Java 17 内置 WebSocket + Jackson
+- 🛡️ 浏览器工具走 HITL 审批（navigate / click / type 中危）
+- 📊 浏览器操作纳入审计日志
+- 🔄 与 `web_fetch` 分工：静态页面用 `web_fetch`，JS 渲染 / 交互用浏览器工具
+
 ## 快速开始
 
 ### 1. 配置 API Key

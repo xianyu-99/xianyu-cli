@@ -8,6 +8,7 @@ import com.paicli.mcp.protocol.McpToolDescriptor;
 import com.paicli.rag.CodeRetriever;
 import com.paicli.rag.SearchResultFormatter;
 import com.paicli.rag.VectorStore;
+import com.paicli.browser.BrowserToolProvider;
 import com.paicli.policy.AuditLog;
 import com.paicli.policy.CommandGuard;
 import com.paicli.policy.PathGuard;
@@ -44,7 +45,10 @@ public class ToolRegistry {
     // 5MB 对常规代码生成 / 文档撰写完全够用，超过即拒，避免磁盘灌满与误覆盖。
     private static final int MAX_WRITE_FILE_BYTES = 5 * 1024 * 1024;
     // 需要审计的内置工具（与 ApprovalPolicy 的 DANGEROUS_TOOLS 保持一致）；MCP 工具按前缀动态纳入审计。
-    private static final Set<String> AUDIT_TOOLS = Set.of("write_file", "execute_command", "create_project");
+    // browser_navigate / browser_click / browser_type 有副作用，纳入审计。
+    private static final Set<String> AUDIT_TOOLS = Set.of(
+            "write_file", "execute_command", "create_project",
+            "browser_navigate", "browser_click", "browser_type");
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
     private final Map<String, McpRegisteredTool> mcpTools = new ConcurrentHashMap<>();
     private final long commandTimeoutSeconds;
@@ -57,6 +61,7 @@ public class ToolRegistry {
     private WebFetcher webFetcher;
     private HtmlExtractor htmlExtractor;
     private NetworkPolicy networkPolicy;
+    private BrowserToolProvider browserToolProvider;
 
     public ToolRegistry() {
         this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS);
@@ -75,6 +80,7 @@ public class ToolRegistry {
         registerCodeTools();
         registerRagTools();
         registerWebTools();
+        registerBrowserTools();
     }
 
     /**
@@ -292,6 +298,80 @@ public class ToolRegistry {
                         new Param("max_chars", "integer", "返回 Markdown 最大字符数（默认 8000，超出截断）", false)
                 ),
                 args -> webFetch(args.get("url"), parseInt(args.get("max_chars"), DEFAULT_FETCH_MAX_CHARS))
+        ));
+    }
+
+    /**
+     * 注册浏览器操控工具（第 13 期 Chrome DevTools MCP）
+     */
+    private void registerBrowserTools() {
+        browserToolProvider = new BrowserToolProvider();
+
+        tools.put("browser_navigate", new Tool(
+                "browser_navigate",
+                "打开指定 URL 的网页。适用于需要 JS 渲染或交互的页面。" +
+                        "静态页面优先使用 web_fetch，需要点击/输入/截图时使用浏览器工具。",
+                createParameters(
+                        new Param("url", "string", "目标 URL，例如 https://example.com", true),
+                        new Param("wait_for_load", "boolean", "是否等待页面加载完成（默认 true）", false)
+                ),
+                args -> browserToolProvider.navigate(args)
+        ));
+
+        tools.put("browser_screenshot", new Tool(
+                "browser_screenshot",
+                "截取当前浏览器页面的截图，保存为 PNG 文件。",
+                createParameters(
+                        new Param("selector", "string", "CSS 选择器（截取特定元素，null 表示整页）", false),
+                        new Param("full_page", "boolean", "是否截取完整页面含滚动区域（默认 false）", false)
+                ),
+                args -> browserToolProvider.screenshot(args)
+        ));
+
+        tools.put("browser_click", new Tool(
+                "browser_click",
+                "点击页面上匹配 CSS 选择器的元素。",
+                createParameters(
+                        new Param("selector", "string", "CSS 选择器，例如 #submit-button、.nav-item", true)
+                ),
+                args -> browserToolProvider.click(args)
+        ));
+
+        tools.put("browser_type", new Tool(
+                "browser_type",
+                "在指定输入框中输入文本。",
+                createParameters(
+                        new Param("selector", "string", "输入框的 CSS 选择器", true),
+                        new Param("text", "string", "要输入的文本", true),
+                        new Param("submit", "boolean", "输入后是否按回车提交（默认 false）", false)
+                ),
+                args -> browserToolProvider.type(args)
+        ));
+
+        tools.put("browser_evaluate", new Tool(
+                "browser_evaluate",
+                "在页面上下文中执行 JavaScript 代码，返回执行结果。",
+                createParameters(
+                        new Param("script", "string", "JavaScript 代码，例如 document.title", true)
+                ),
+                args -> browserToolProvider.evaluate(args)
+        ));
+
+        tools.put("browser_get_dom", new Tool(
+                "browser_get_dom",
+                "获取页面或指定元素的文本内容。",
+                createParameters(
+                        new Param("selector", "string", "CSS 选择器（null 表示获取整个页面正文）", false),
+                        new Param("max_length", "integer", "最大返回字符数（默认 8000）", false)
+                ),
+                args -> browserToolProvider.getDom(args)
+        ));
+
+        tools.put("browser_close", new Tool(
+                "browser_close",
+                "关闭浏览器进程，释放资源。",
+                createParameters(),
+                args -> browserToolProvider.closeBrowser(args)
         ));
     }
 

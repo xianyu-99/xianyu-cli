@@ -309,24 +309,36 @@
 
 ---
 
-## 第13期：Chrome DevTools MCP
+## 第13期：Chrome DevTools MCP ✅
 
-**前置依赖**：第 10 / 11 期 MCP 框架
+**已完成**
 
 **目标**：让 Agent 能操控浏览器，处理需要 JS 渲染或 UI 交互的页面
 
 **功能迭代**：
-- 通过 MCP 协议接入 Chrome DevTools Server
-- 浏览器基础操作：打开页面、截图、读取 DOM、点击交互
-- 与已有 `web_fetch` 的分工：静态页面走 `web_fetch`，需 JS 渲染或交互的走浏览器
-- Agent 工具选择策略升级：何时用 `web_fetch`、何时上浏览器
+- 手写 CDP 协议栈：Java 17 内置 WebSocket + Jackson，零额外依赖
+- 浏览器基础操作（7 个工具）：
+  - `browser_navigate` - 打开网页，等待加载完成
+  - `browser_screenshot` - 页面/元素截图，保存 PNG
+  - `browser_click` - CSS 选择器点击元素
+  - `browser_type` - 输入文本，可选提交
+  - `browser_evaluate` - 执行 JavaScript
+  - `browser_get_dom` - 获取页面文本内容
+  - `browser_close` - 关闭浏览器释放资源
+- ChromeLauncher：自动查找系统 Chrome，ProcessBuilder 启动，JVM 退出 hook 清理
+- ChromeDiscovery：HTTP /json/list /json/version 查询 WebSocket URL
+- CdpWebSocketClient：JSON-RPC 请求/响应配对，事件监听
+- 与已有 `web_fetch` 的分工：静态页面走 `web_fetch`，JS 渲染 / 交互 / 防爬站走浏览器工具
+- Agent 系统提示词升级：明确浏览器工具使用场景和选择策略
+- HITL 集成：`browser_navigate` / `browser_click` / `browser_type` 走审批（中危）
+- AuditLog：浏览器操作纳入审计
 
 **核心知识点**：
 - Chrome DevTools Protocol（CDP）基础
-- MCP 协议客户端实战
+- WebSocket + JSON-RPC 2.0 手写实现
 - 浏览器自动化工具集合
 
-**教程标题候选**：《静态抓取不够看？接入 Chrome DevTools MCP，让 Agent 自己开浏览器》
+**教程标题候选**：《静态抓取不够看？手写 CDP 协议，让 Agent 自己开浏览器》
 
 ---
 

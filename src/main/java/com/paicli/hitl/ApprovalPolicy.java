@@ -14,10 +14,14 @@ import java.util.Set;
 public class ApprovalPolicy {
 
     // 需要人工确认的工具集合
+    // browser_navigate / browser_click / browser_type 有副作用（打开外部网页、触发页面交互），纳入审批
     private static final Set<String> DANGEROUS_TOOLS = Set.of(
             "write_file",
             "execute_command",
-            "create_project"
+            "create_project",
+            "browser_navigate",
+            "browser_click",
+            "browser_type"
     );
 
     private ApprovalPolicy() {
@@ -36,8 +40,8 @@ public class ApprovalPolicy {
     public static String getDangerLevel(String toolName) {
         return switch (toolName) {
             case "execute_command" -> "🔴 高危";
-            case "write_file" -> "🟡 中危";
-            case "create_project" -> "🟡 中危";
+            case "write_file", "create_project" -> "🟡 中危";
+            case "browser_navigate", "browser_click", "browser_type" -> "🟡 中危";
             default -> isMcpTool(toolName) ? "🟡 MCP" : "🟢 安全";
         };
     }
@@ -50,6 +54,9 @@ public class ApprovalPolicy {
             case "execute_command" -> "将在系统上执行 Shell 命令，可能修改文件、安装软件或影响系统状态";
             case "write_file" -> "将写入或覆盖文件内容，原有内容将丢失";
             case "create_project" -> "将在磁盘上创建新目录和文件";
+            case "browser_navigate" -> "将打开外部网页，可能触发网络请求和页面加载";
+            case "browser_click" -> "将点击页面元素，可能触发页面跳转、提交表单或触发不可预期操作";
+            case "browser_type" -> "将在页面输入框中输入文本，可能修改表单内容";
             default -> isMcpTool(toolName)
                     ? "将调用外部 MCP server 提供的工具，可能访问网络、文件或第三方服务"
                     : "安全的只读操作";
