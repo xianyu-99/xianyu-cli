@@ -149,6 +149,7 @@ public class Main {
             AtMentionExpander mentionExpander = new AtMentionExpander(mcpServerManager);
 
             Agent reactAgent = new Agent(llmClient, hitlToolRegistry);
+            reactAgent.setMcpServerManager(mcpServerManager);
             System.out.println("🔄 使用 ReAct 模式\n");
             boolean nextTaskUsePlanMode = false;
             boolean nextTaskUseTeamMode = false;

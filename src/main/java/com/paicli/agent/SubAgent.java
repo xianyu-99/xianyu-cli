@@ -162,7 +162,7 @@ public class SubAgent {
         SubAgentStreamRenderer streamRenderer = new SubAgentStreamRenderer(name, role, out);
 
         long startNanos = System.nanoTime();
-        AgentBudget budget = AgentBudget.fromSystemProperties();
+        AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
 
         // 与 Agent.java 对称：主退出条件 = LLM 自决，budget 仅在 token / 停滞 / 硬轮数兜底。
         while (true) {

@@ -88,6 +88,26 @@ class AgentBudgetTest {
         assertTrue(message.contains("100"));
     }
 
+    @Test
+    void fromLlmClientCalculatesBudgetFromContextWindow() {
+        LlmClient client = new LlmClient() {
+            @Override public ChatResponse chat(List<Message> messages, List<Tool> tools) { return null; }
+            @Override public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) { return null; }
+            @Override public String getModelName() { return "test"; }
+            @Override public String getProviderName() { return "test"; }
+            @Override public int maxContextWindow() { return 200_000; }
+        };
+
+        AgentBudget budget = AgentBudget.fromLlmClient(client);
+        assertEquals(160_000, budget.tokenBudget()); // 80% of 200k
+    }
+
+    @Test
+    void fromLlmClientFallsBackToDefaultWhenClientIsNull() {
+        AgentBudget budget = AgentBudget.fromLlmClient(null);
+        assertEquals(300_000, budget.tokenBudget());
+    }
+
     private LlmClient.ToolCall toolCall(String name, String args) {
         return new LlmClient.ToolCall("call_" + name + "_" + args.hashCode(),
                 new LlmClient.ToolCall.Function(name, args));

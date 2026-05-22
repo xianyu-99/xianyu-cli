@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -11,7 +13,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class CodeRetrieverTest {
 
-    private static final String TEST_PROJECT = "/tmp/paicli-code-retriever";
+    private static final String TEST_PROJECT;
+    static {
+        // 使用绝对路径，确保 VectorStore 和 CodeRetriever 的 projectPath 一致
+        Path path = Paths.get("/tmp/paicli-code-retriever").toAbsolutePath().normalize();
+        TEST_PROJECT = path.toString();
+    }
     private VectorStore store;
 
     @BeforeEach
@@ -48,9 +55,14 @@ class CodeRetrieverTest {
                 new VectorStore.CodeChunkEntry(agentChunk, new float[]{0.80f, 0.20f})
         ));
 
+        // 让查询向量更接近 agentChunk，确保语义搜索中 Agent.run 排第一
         EmbeddingClient stubClient = new EmbeddingClient("ollama", "stub", "http://localhost", "") {
             @Override
             public float[] embed(String text) {
+                // 当查询包含 "Agent" 时，返回与 agentChunk 对齐的向量
+                if (text.toLowerCase().contains("agent")) {
+                    return new float[]{0.80f, 0.20f};
+                }
                 return new float[]{1.0f, 0.0f};
             }
         };

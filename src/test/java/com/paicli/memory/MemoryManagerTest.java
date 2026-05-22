@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MemoryManagerTest {
@@ -27,7 +28,7 @@ class MemoryManagerTest {
         MemoryManager memoryManager = new MemoryManager(
                 llmClient,
                 40,
-                128000,
+                32000,
                 new LongTermMemory(tempDir.toFile())
         );
         String longMessage = "a".repeat(36);
@@ -53,6 +54,39 @@ class MemoryManagerTest {
         memoryManager.clearLongTerm();
 
         assertEquals(0, longTermMemory.size());
+    }
+
+    @Test
+    void shortContextModeBelow100k() {
+        MemoryManager manager = new MemoryManager(new StubGLMClient(List.of()), 32768, 32000, null);
+        assertEquals(MemoryManager.ContextMode.SHORT, manager.getContextMode());
+    }
+
+    @Test
+    void longContextModeAt100kOrAbove() {
+        MemoryManager manager = new MemoryManager(new StubGLMClient(List.of()), 32768, 100_000, null);
+        assertEquals(MemoryManager.ContextMode.LONG, manager.getContextMode());
+
+        MemoryManager manager2 = new MemoryManager(new StubGLMClient(List.of()), 32768, 1_000_000, null);
+        assertEquals(MemoryManager.ContextMode.LONG, manager2.getContextMode());
+    }
+
+    @Test
+    void longContextModeSkipsCompression() {
+        StubGLMClient llmClient = new StubGLMClient(List.of(
+                new LlmClient.ChatResponse("assistant", "压缩摘要", null, 100, 20)
+        ));
+        MemoryManager memoryManager = new MemoryManager(llmClient, 40, 100_000, null);
+        String longMessage = "a".repeat(36);
+
+        memoryManager.addUserMessage(longMessage);
+        memoryManager.addAssistantMessage(longMessage);
+        memoryManager.addUserMessage(longMessage);
+        memoryManager.addAssistantMessage(longMessage);
+
+        // LONG 模式下不压缩，所以不会有 SUMMARY 条目
+        assertFalse(memoryManager.getShortTermMemory().getAll().stream()
+                .anyMatch(entry -> entry.getType() == MemoryEntry.MemoryType.SUMMARY));
     }
 
     private static final class StubGLMClient extends GLMClient {

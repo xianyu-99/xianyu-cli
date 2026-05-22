@@ -83,6 +83,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
             List<ToolCallAccumulator> toolAccumulators = new ArrayList<>();
             int inputTokens = 0;
             int outputTokens = 0;
+            int cachedTokens = 0;
 
             while (!source.exhausted()) {
                 String line = source.readUtf8Line();
@@ -108,6 +109,8 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 if (!usage.isMissingNode()) {
                     inputTokens = usage.path("prompt_tokens").asInt(inputTokens);
                     outputTokens = usage.path("completion_tokens").asInt(outputTokens);
+                    // DeepSeek / GLM 等可能返回 prompt_cache_hit_tokens
+                    cachedTokens = usage.path("prompt_cache_hit_tokens").asInt(cachedTokens);
                 }
 
                 JsonNode choices = root.path("choices");
@@ -150,7 +153,8 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     reasoning.toString(),
                     buildToolCalls(toolAccumulators),
                     inputTokens,
-                    outputTokens
+                    outputTokens,
+                    cachedTokens
             );
         }
     }

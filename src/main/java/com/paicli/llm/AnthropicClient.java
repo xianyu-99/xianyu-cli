@@ -96,6 +96,16 @@ public class AnthropicClient implements LlmClient {
     @Override
     public String getProviderName() { return "anthropic"; }
 
+    @Override
+    public int maxContextWindow() {
+        return 1_000_000;
+    }
+
+    @Override
+    public boolean supportsPromptCaching() {
+        return true;
+    }
+
     // ---- request builder ----
 
     private String buildUrl() {
@@ -161,7 +171,17 @@ public class AnthropicClient implements LlmClient {
         }
 
         if (!systemText.isEmpty()) {
-            root.put("system", systemText.toString());
+            if (supportsPromptCaching()) {
+                // Anthropic prompt caching: system as content block array with cache_control
+                ArrayNode systemBlocks = root.putArray("system");
+                ObjectNode textBlock = systemBlocks.addObject();
+                textBlock.put("type", "text");
+                textBlock.put("text", systemText.toString());
+                ObjectNode cacheControl = textBlock.putObject("cache_control");
+                cacheControl.put("type", "ephemeral");
+            } else {
+                root.put("system", systemText.toString());
+            }
         }
 
         // tools
@@ -186,6 +206,7 @@ public class AnthropicClient implements LlmClient {
         List<ToolUseAccumulator> toolAccums = new ArrayList<>();
         int inputTokens = 0;
         int outputTokens = 0;
+        int cachedTokens = 0;
         String role = "assistant";
 
         while (!source.exhausted()) {
@@ -220,6 +241,7 @@ public class AnthropicClient implements LlmClient {
                 case "message_start" -> {
                     JsonNode usage = root.path("message").path("usage");
                     inputTokens = usage.path("input_tokens").asInt(0);
+                    cachedTokens = usage.path("cache_read_input_tokens").asInt(0);
                 }
                 case "content_block_start" -> {
                     JsonNode block = root.path("content_block");
@@ -283,7 +305,8 @@ public class AnthropicClient implements LlmClient {
                 reasoning.length() > 0 ? reasoning.toString() : null,
                 toolCalls,
                 inputTokens,
-                outputTokens
+                outputTokens,
+                cachedTokens
         );
     }
 

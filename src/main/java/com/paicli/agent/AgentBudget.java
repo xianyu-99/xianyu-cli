@@ -19,6 +19,11 @@ import java.util.Locale;
  *
  * 这三个条件按"先到先触发"判定，任何一个命中都会让循环结束。
  *
+ * Token 预算策略（第 12 期长上下文工程）：
+ * - 优先按当前模型的 {@code maxContextWindow * 80%} 动态计算（{@link #fromLlmClient}）
+ * - 仍可通过系统属性 {@code paicli.react.token.budget} 强制覆盖
+ * - 兜底默认值：300_000 token
+ *
  * 配置读取顺序（以 {@link #fromSystemProperties()} 为准）：
  * 1. 系统属性：{@code paicli.react.token.budget} / {@code paicli.react.stagnation.window} /
  *    {@code paicli.react.hard.max.iterations}
@@ -36,6 +41,9 @@ public class AgentBudget {
     private static final int DEFAULT_TOKEN_BUDGET = 300_000;
     private static final int DEFAULT_STAGNATION_WINDOW = 3;
     private static final int DEFAULT_HARD_MAX_ITERATIONS = 50;
+
+    /** Token 预算占 maxContextWindow 的比例（默认 80%）。 */
+    private static final double TOKEN_BUDGET_RATIO = 0.8;
 
     private final int tokenBudget;
     private final int stagnationWindow;
@@ -65,6 +73,26 @@ public class AgentBudget {
     public static AgentBudget fromSystemProperties() {
         return new AgentBudget(
                 readIntProperty("paicli.react.token.budget", DEFAULT_TOKEN_BUDGET),
+                readIntProperty("paicli.react.stagnation.window", DEFAULT_STAGNATION_WINDOW),
+                readIntProperty("paicli.react.hard.max.iterations", DEFAULT_HARD_MAX_ITERATIONS)
+        );
+    }
+
+    /**
+     * 根据当前 LLM 模型的上下文窗口动态创建预算。
+     * Token 预算 = {@code maxContextWindow * TOKEN_BUDGET_RATIO}（默认 80%）。
+     *
+     * @param client 当前使用的 LLM 客户端
+     */
+    public static AgentBudget fromLlmClient(com.paicli.llm.LlmClient client) {
+        int tokenBudget;
+        if (client != null) {
+            tokenBudget = (int) (client.maxContextWindow() * TOKEN_BUDGET_RATIO);
+        } else {
+            tokenBudget = DEFAULT_TOKEN_BUDGET;
+        }
+        return new AgentBudget(
+                tokenBudget,
                 readIntProperty("paicli.react.stagnation.window", DEFAULT_STAGNATION_WINDOW),
                 readIntProperty("paicli.react.hard.max.iterations", DEFAULT_HARD_MAX_ITERATIONS)
         );

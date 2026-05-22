@@ -1,8 +1,8 @@
 package com.paicli.tool;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -15,13 +15,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ToolRegistryTest {
 
     @Test
-    void shouldRunCommandInProjectDirectory(@TempDir Path tempDir) {
-        ToolRegistry registry = new ToolRegistry();
-        registry.setProjectPath(tempDir.toString());
+    void shouldRunCommandInProjectDirectory() throws Exception {
+        // 手动创建目录避免 @TempDir 在 Windows 上的清理问题
+        Path tempDir = Files.createTempDirectory("paicli-test-");
+        try {
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
 
-        String result = registry.executeTool("execute_command", "{\"command\":\"pwd\"}");
+            // execute_command 在内部用 bash -c 执行，pwd 在 bash 中可用
+            String result = registry.executeTool("execute_command", "{\"command\":\"pwd\"}");
 
-        assertTrue(result.contains(tempDir.toString()));
+            // bash 在 Windows 上可能输出 /c/Users/... 或 /mnt/c/Users/...
+            // 所以检查项目路径的最后一级目录名即可
+            assertTrue(result.contains(tempDir.getFileName().toString()),
+                    "命令输出应包含目录名: " + result);
+        } finally {
+            // 静默清理，忽略 Windows 上可能无法删除的情况
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
     }
 
     @Test
@@ -34,13 +45,20 @@ class ToolRegistryTest {
     }
 
     @Test
-    void shouldTimeoutLongRunningCommandWithoutHanging(@TempDir Path tempDir) {
-        ToolRegistry registry = new ToolRegistry(1);
-        registry.setProjectPath(tempDir.toString());
+    void shouldTimeoutLongRunningCommandWithoutHanging() throws Exception {
+        // 手动创建目录避免 @TempDir 在 Windows 上的清理问题
+        Path tempDir = Files.createTempDirectory("paicli-test-");
+        try {
+            ToolRegistry registry = new ToolRegistry(1);
+            registry.setProjectPath(tempDir.toString());
 
-        String result = registry.executeTool("execute_command", "{\"command\":\"sleep 2\"}");
+            // execute_command 内部用 bash -c 执行，sleep 在 bash 中通用
+            String result = registry.executeTool("execute_command", "{\"command\":\"sleep 2\"}");
 
-        assertTrue(result.contains("命令执行超时"));
+            assertTrue(result.contains("命令执行超时"), "预期超时，实际输出: " + result);
+        } finally {
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
     }
 
     @Test

@@ -207,6 +207,18 @@
 - 🧩 `/mcp prompts <server>` 查看 server 暴露的 prompts，但不自动注入对话
 - 🔄 被动响应 MCP list_changed / resources updated 通知，刷新工具列表或让 resource cache 失效
 
+### 第十二期
+
+- 📏 `LlmClient` 能力声明：`maxContextWindow()`（GLM-5.1: 200k / DeepSeek V4 & Claude: 1M）+ `supportsPromptCaching()`
+- 💰 `AgentBudget` 按模型动态计算：token 预算 = `maxContextWindow × 80%`，不再是写死 300K
+- 🔄 长 / 短上下文双模式：
+  - 短模式（< 32k 窗口）：保留完整 Memory 策略（摘要 / 压缩 / 检索）
+  - 长模式（≥ 100k 窗口）：跳过摘要压缩、search_code 默认 top-K 从 5 → 20、允许直接装填大文件
+- 🚀 Prompt caching 接入：`ChatResponse` 新增 `cachedTokens`，DeepSeek `prompt_cache_hit_tokens` / Anthropic `cache_read_input_tokens` 自动解析
+- 📊 Token 统计增强：每轮结束后打印 `📊 Token: X 输入 / Y 输出 / Z 合计 (cached: W) | ⏱ Ns`
+- 📋 `/context` 命令扩展：显示窗口占用率、上下文模式（long/short）、缓存命中、Prompt Caching 支持状态
+- 🔗 MCP resources 自动注入：长模式下，所有 server 已知 resources 的 URI + 描述自动写入 system prompt，LLM 可直接判断引用
+
 ## 快速开始
 
 ### 1. 配置 API Key
@@ -432,6 +444,7 @@ I
 - `/mcp prompts <name>` - 查看 MCP server 暴露的 prompts（只查看，不注入对话）
 - `/policy` - 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限 / 审计目录）
 - `/audit [N]` - 查看今日最近 N 条危险工具审计记录（默认 10）
+- `/context` / `/ctx` - 查看上下文状态（窗口占用率 / 模式 / 缓存命中 / MCP resources）
 - `/memory` / `/mem` - 查看记忆系统状态
 - `/memory clear` - 清空长期记忆
 - `/save <事实>` - 手动保存关键事实到长期记忆

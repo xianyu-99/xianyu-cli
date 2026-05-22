@@ -33,9 +33,41 @@ public class Agent {
     private final List<LlmClient.Message> conversationHistory;
     private final MemoryManager memoryManager;
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+    private int accumulatedCachedTokens;
+    private com.paicli.mcp.McpServerManager mcpServerManager;
 
-    // 系统提示词
-    private static final String SYSTEM_PROMPT = """
+    /**
+     * 构建系统提示词，根据上下文模式动态调整工具描述。
+     *
+     * @param mode 当前上下文模式（SHORT / LONG）
+     */
+    private String buildSystemPrompt(com.paicli.memory.MemoryManager.ContextMode mode) {
+        int searchTopK = (mode == com.paicli.memory.MemoryManager.ContextMode.LONG) ? 20 : 5;
+        String longModeHint = (mode == com.paicli.memory.MemoryManager.ContextMode.LONG)
+                ? "\n当前处于长上下文模式（≥100k 窗口），你有充足的 token 预算，可以："
+                  + "\n- 直接读取较大文件而无需担心上下文溢出"
+                  + "\n- 在 search_code 时请求更多结果（top_k 可达 20）来全面了解代码库"
+                  + "\n- 保留更长的对话历史，不需要刻意压缩"
+                : "";
+
+        // 长上下文模式下注入 MCP resources 索引（URI + 描述，不含 body）
+        String resourcesIndex = "";
+        if (mode == com.paicli.memory.MemoryManager.ContextMode.LONG && mcpServerManager != null) {
+            java.util.List<com.paicli.mcp.resources.McpResourceDescriptor> resources = mcpServerManager.resourceCandidates();
+            if (!resources.isEmpty()) {
+                StringBuilder rb = new StringBuilder("\n\n可用 MCP Resources 索引（可直接 @server:uri 引用）：\n");
+                for (com.paicli.mcp.resources.McpResourceDescriptor r : resources) {
+                    rb.append(String.format("- %s:%s (%s)%n",
+                            r.serverName(), r.uri(), r.displayName()));
+                    if (r.description() != null && !r.description().isBlank()) {
+                        rb.append("  ").append(r.description()).append("\n");
+                    }
+                }
+                resourcesIndex = rb.toString();
+            }
+        }
+
+        return """
             你是一个智能编程 Agent PaiCLI，可以帮助用户完成各种任务。
 
             你可以使用以下工具来完成任务：
@@ -44,7 +76,7 @@ public class Agent {
             3. list_dir - 列出目录内容
             4. execute_command - 执行Shell命令
             5. create_project - 创建新项目结构
-            6. search_code - 语义检索代码库，参数：{"query": "自然语言描述", "top_k": 5}
+            6. search_code - 语义检索代码库，参数：{"query": "自然语言描述", "top_k": %d}
             7. web_search - 搜索互联网获取实时信息（最新版本、官方文档、技术资讯等），参数：{"query": "搜索关键词", "top_k": 5}
             8. web_fetch - 抓取已知 URL 并返回正文 Markdown，参数：{"url": "https://...", "max_chars": 8000}
             9. mcp__{server}__{tool} - MCP server 动态提供的外部工具，具体参数以工具 schema 为准
@@ -71,9 +103,11 @@ public class Agent {
             - web_fetch 拿到空正文（提示 SPA / 防爬墙）→ 这是已知边界，告知用户即可，不要反复重试
 
             如果提供了相关记忆，请参考其中的信息来辅助决策。
-
+            %s
+            %s
             请用中文回复用户。
-            """;
+            """.formatted(searchTopK, longModeHint, resourcesIndex);
+    }
 
     public Agent(LlmClient llmClient) {
         this(llmClient, new ToolRegistry());
@@ -83,13 +117,18 @@ public class Agent {
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
         this.conversationHistory = new ArrayList<>();
-        this.memoryManager = new MemoryManager(llmClient);
-        conversationHistory.add(LlmClient.Message.system(SYSTEM_PROMPT));
+        int contextWindow = llmClient != null ? llmClient.maxContextWindow() : 128_000;
+        this.memoryManager = new MemoryManager(llmClient, 32768, contextWindow);
+        conversationHistory.add(LlmClient.Message.system(buildSystemPrompt(memoryManager.getContextMode())));
     }
 
     public void setLlmClient(LlmClient llmClient) {
         this.llmClient = llmClient;
         this.memoryManager.setLlmClient(llmClient);
+    }
+
+    public void setMcpServerManager(com.paicli.mcp.McpServerManager mcpServerManager) {
+        this.mcpServerManager = mcpServerManager;
     }
 
     /**
@@ -110,7 +149,8 @@ public class Agent {
         StreamRenderer streamRenderer = new StreamRenderer();
 
         long startNanos = System.nanoTime();
-        AgentBudget budget = AgentBudget.fromSystemProperties();
+        AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
+        accumulatedCachedTokens = 0;
 
         // 主退出条件 = LLM 自己决定（不再调用工具就返回）；
         // budget 仅在 token 用尽 / 检测到死循环 / 超出硬轮数时兜底。
@@ -121,7 +161,7 @@ public class Agent {
             }
             AgentBudget.ExitReason exitReason = budget.check();
             if (exitReason != AgentBudget.ExitReason.WITHIN_BUDGET) {
-                String statsLine = formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), startNanos);
+                String statsLine = formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), accumulatedCachedTokens, startNanos);
                 String description = budget.describeExit(exitReason);
                 log.warn("ReAct run exhausted budget: reason={}, iteration={}, tokens={}/{}",
                         exitReason, budget.iteration(),
@@ -144,6 +184,7 @@ public class Agent {
                 }
 
                 budget.recordTokens(response.inputTokens(), response.outputTokens());
+                accumulatedCachedTokens += response.cachedTokens();
 
                 // 如果有工具调用
                 if (response.hasToolCalls()) {
@@ -194,7 +235,7 @@ public class Agent {
                     log.debug("Assistant answer preview: {}", preview(response.content(), 500));
                 }
 
-                String statsLine = formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), startNanos);
+                String statsLine = formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), accumulatedCachedTokens, startNanos);
 
                 if (streamRenderer.hasStreamedOutput()) {
                     streamRenderer.finish();
@@ -227,11 +268,11 @@ public class Agent {
      * 将记忆上下文注入到 system prompt 中（替换 conversationHistory[0]）
      */
     private void updateSystemPromptWithMemory(String memoryContext) {
+        String basePrompt = buildSystemPrompt(memoryManager.getContextMode());
         if (memoryContext == null || memoryContext.isEmpty()) {
-            // 恢复原始 system prompt
-            conversationHistory.set(0, LlmClient.Message.system(SYSTEM_PROMPT));
+            conversationHistory.set(0, LlmClient.Message.system(basePrompt));
         } else {
-            String enrichedPrompt = SYSTEM_PROMPT + "\n" + memoryContext;
+            String enrichedPrompt = basePrompt + "\n" + memoryContext;
             conversationHistory.set(0, LlmClient.Message.system(enrichedPrompt));
         }
     }
@@ -265,9 +306,20 @@ public class Agent {
         int totalMessages = conversationHistory.size();
         int rounds = userCount;
 
+        // 估算窗口占用率
+        int estimatedTokens = com.paicli.memory.TokenBudget.estimateMessagesTokens(conversationHistory);
+        int contextWindow = llmClient != null ? llmClient.maxContextWindow() : 128_000;
+        double usageRatio = contextWindow > 0 ? (double) estimatedTokens / contextWindow : 0;
+
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("对话上下文: %d 条消息, %d 轮对话, ~%d 字符\n", totalMessages, rounds, totalChars));
         sb.append(String.format("   system: %d / user: %d / assistant: %d / tool: %d\n", systemCount, userCount, assistantCount, toolCount));
+        sb.append(String.format("窗口占用: %d / %d tokens (%.1f%%)\n", estimatedTokens, contextWindow, usageRatio * 100));
+        sb.append(String.format("上下文模式: %s\n", memoryManager.getContextMode()));
+        if (accumulatedCachedTokens > 0) {
+            sb.append(String.format("缓存命中: %d tokens\n", accumulatedCachedTokens));
+        }
+        sb.append(String.format("Prompt Caching: %s\n", llmClient != null && llmClient.supportsPromptCaching() ? "支持" : "不支持"));
         sb.append(memoryManager.getSystemStatus());
         return sb.toString();
     }
@@ -279,11 +331,12 @@ public class Agent {
         return toolRegistry;
     }
 
-    private static String formatTokenStats(int inputTokens, int outputTokens, long startNanos) {
+    private static String formatTokenStats(int inputTokens, int outputTokens, int cachedTokens, long startNanos) {
         double elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
+        String cacheHint = cachedTokens > 0 ? String.format(" (cached: %d)", cachedTokens) : "";
         return AnsiStyle.subtle(String.format(
-                "📊 Token: %d 输入 / %d 输出 / %d 合计 | ⏱ %.1fs",
-                inputTokens, outputTokens, inputTokens + outputTokens, elapsedSeconds));
+                "📊 Token: %d 输入 / %d 输出 / %d 合计%s | ⏱ %.1fs",
+                inputTokens, outputTokens, inputTokens + outputTokens, cacheHint, elapsedSeconds));
     }
 
     private void appendReasoning(StringBuilder reasoningTranscript, String reasoningContent) {

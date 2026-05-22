@@ -17,7 +17,14 @@ class CodeIndexTest {
     @Test
     void testIndexCurrentProject() {
         System.setProperty("paicli.rag.dir", "/tmp/paicli-test-rag-index");
-        CodeIndex indexer = new CodeIndex();
+        // 使用 stub embedding client，避免依赖 Ollama
+        EmbeddingClient stubClient = new EmbeddingClient("stub", "stub", "http://localhost", "") {
+            @Override
+            public float[] embed(String text) {
+                return new float[]{1.0f, 0.0f, 0.0f, 0.0f};
+            }
+        };
+        CodeIndex indexer = new CodeIndex(stubClient);
         // 索引测试资源目录
         CodeIndex.IndexResult result = indexer.index("src/test/resources/rag");
         assertTrue(result.chunkCount() > 0, "应该至少索引一个代码块");

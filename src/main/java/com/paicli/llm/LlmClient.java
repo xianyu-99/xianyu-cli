@@ -15,6 +15,22 @@ public interface LlmClient {
 
     String getProviderName();
 
+    /**
+     * 该模型的最大上下文窗口（token 数）。
+     * 例如 GLM-5.1 返回 200_000，DeepSeek V4 / Claude Sonnet 返回 1_000_000。
+     */
+    default int maxContextWindow() {
+        return 128_000;
+    }
+
+    /**
+     * 是否支持 prompt caching。
+     * Anthropic Claude (cache_control)、GLM-5.1 (prompt_cache)、DeepSeek V4 (prefix_cache) 均返回 true。
+     */
+    default boolean supportsPromptCaching() {
+        return false;
+    }
+
     record Message(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
                    String toolCallId) {
         public Message(String role, String content) {
@@ -65,10 +81,15 @@ public interface LlmClient {
     }
 
     record ChatResponse(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
-                        int inputTokens, int outputTokens) {
+                        int inputTokens, int outputTokens, int cachedTokens) {
         public ChatResponse(String role, String content, List<ToolCall> toolCalls,
                             int inputTokens, int outputTokens) {
-            this(role, content, null, toolCalls, inputTokens, outputTokens);
+            this(role, content, null, toolCalls, inputTokens, outputTokens, 0);
+        }
+
+        public ChatResponse(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
+                            int inputTokens, int outputTokens) {
+            this(role, content, reasoningContent, toolCalls, inputTokens, outputTokens, 0);
         }
 
         public boolean hasToolCalls() {

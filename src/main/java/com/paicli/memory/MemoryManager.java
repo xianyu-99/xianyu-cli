@@ -11,13 +11,24 @@ import java.util.UUID;
  *
  * 统一管理短期记忆、长期记忆、上下文压缩和检索，
  * 为 Agent 提供简洁的记忆存取接口。
+ *
+ * 第 12 期长上下文工程：支持长/短双模式
+ * - 短模式（< 32k）：完整 Memory 策略（摘要、检索、压缩）
+ * - 长模式（≥ 100k）：跳过摘要压缩，提高 RAG top-K，允许直接装填大段内容
  */
 public class MemoryManager {
+
+    public enum ContextMode {
+        SHORT,   // < 32k 窗口，走完整记忆策略
+        LONG     // ≥ 100k 窗口，跳过压缩，放宽限制
+    }
+
     private final ConversationMemory shortTermMemory;
     private final LongTermMemory longTermMemory;
     private final ContextCompressor compressor;
     private final MemoryRetriever retriever;
     private final TokenBudget tokenBudget;
+    private final ContextMode contextMode;
 
     public MemoryManager(LlmClient llmClient) {
         this(llmClient, 32768, 200000, null);
@@ -38,6 +49,14 @@ public class MemoryManager {
         this.compressor = new ContextCompressor(llmClient);
         this.retriever = new MemoryRetriever(shortTermMemory, this.longTermMemory);
         this.tokenBudget = new TokenBudget(contextWindow);
+        this.contextMode = resolveContextMode(contextWindow);
+    }
+
+    private static ContextMode resolveContextMode(int contextWindow) {
+        if (contextWindow >= 100_000) {
+            return ContextMode.LONG;
+        }
+        return ContextMode.SHORT;
     }
 
     public void setLlmClient(LlmClient llmClient) {
@@ -137,6 +156,10 @@ public class MemoryManager {
      * @return 是否执行了压缩
      */
     public boolean compressIfNeeded() {
+        // 长上下文模式下跳过摘要压缩（窗口足够大，不需要压缩）
+        if (contextMode == ContextMode.LONG) {
+            return false;
+        }
         if (!tokenBudget.needsCompression(shortTermMemory)) {
             return false;
         }
@@ -170,6 +193,10 @@ public class MemoryManager {
         return shortTermMemory.getStatusSummary() + "\n" +
                 longTermMemory.getStatusSummary() + "\n" +
                 tokenBudget.getUsageReport();
+    }
+
+    public ContextMode getContextMode() {
+        return contextMode;
     }
 
     // Getter
