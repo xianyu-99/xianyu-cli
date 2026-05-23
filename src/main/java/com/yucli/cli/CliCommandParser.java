@@ -32,7 +32,8 @@ final class CliCommandParser {
         SKILL_LIST,
         SKILL_ON,
         SKILL_OFF,
-        SKILL_RELOAD
+        SKILL_RELOAD,
+        TUI_LAUNCH
     }
 
     record ParsedCommand(CommandType type, String payload) {
@@ -207,6 +208,10 @@ final class CliCommandParser {
 
         if (trimmed.equalsIgnoreCase("/skill reload")) {
             return new ParsedCommand(CommandType.SKILL_RELOAD, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/tui")) {
+            return new ParsedCommand(CommandType.TUI_LAUNCH, null);
         }
 
         if (trimmed.startsWith("/")) {

@@ -55,6 +55,13 @@
             <version>3.26.3</version>
         </dependency>
 
+        <!-- Lanterna for TUI interface -->
+        <dependency>
+            <groupId>com.googlecode.lanterna</groupId>
+            <artifactId>lanterna</artifactId>
+            <version>3.1.1</version>
+        </dependency>
+
         <!-- 中文分词 -->
         <dependency>
             <groupId>com.huaban</groupId>

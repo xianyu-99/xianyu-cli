@@ -186,4 +186,21 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.CANCEL, CliCommandParser.parse("/cancel").type());
         assertEquals(CliCommandParser.CommandType.CANCEL, CliCommandParser.parse("cancel").type());
     }
+
+    @Test
+    void parsesTuiLaunchCommand() {
+        assertEquals(CliCommandParser.CommandType.TUI_LAUNCH, CliCommandParser.parse("/tui").type());
+        assertNull(CliCommandParser.parse("/tui").payload());
+    }
+
+    @Test
+    void parsesSkillCommands() {
+        assertEquals(CliCommandParser.CommandType.SKILL_LIST, CliCommandParser.parse("/skill").type());
+        assertEquals(CliCommandParser.CommandType.SKILL_LIST, CliCommandParser.parse("/skill list").type());
+        assertEquals(CliCommandParser.CommandType.SKILL_ON, CliCommandParser.parse("/skill on web-access").type());
+        assertEquals("web-access", CliCommandParser.parse("/skill on web-access").payload());
+        assertEquals(CliCommandParser.CommandType.SKILL_OFF, CliCommandParser.parse("/skill off web-access").type());
+        assertEquals("web-access", CliCommandParser.parse("/skill off web-access").payload());
+        assertEquals(CliCommandParser.CommandType.SKILL_RELOAD, CliCommandParser.parse("/skill reload").type());
+    }
 }

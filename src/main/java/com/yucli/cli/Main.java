@@ -20,6 +20,7 @@ import com.yucli.rag.CodeRelation;
 import com.yucli.rag.SearchResultFormatter;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.runtime.CancellationToken;
+import com.yucli.tui.TuiApplication;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.terminal.Attributes;
@@ -53,7 +54,7 @@ import java.util.concurrent.TimeUnit;
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.yucli.policy
  */
 public class Main {
-    private static final String VERSION = "15.0.0";
+    private static final String VERSION = "16.0.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";
@@ -195,7 +196,13 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /tui /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        continue;
+                    }
+                    case TUI_LAUNCH -> {
+                        System.out.println("🖥️ 启动 TUI 模式...\n");
+                        TuiApplication.launch();
+                        System.out.println("👤 已退出 TUI，回到 CLI 模式。\n");
                         continue;
                     }
                     case EXIT -> {
@@ -854,6 +861,7 @@ public class Main {
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
+                "输入 '/tui' 启动终端图形界面模式（TUI）",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
                 "输入 '/graph <类名>' 查看代码关系图谱",
