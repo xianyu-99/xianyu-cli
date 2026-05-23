@@ -1,6 +1,7 @@
 package com.yucli.tui;
 
 import com.googlecode.lanterna.gui2.Label;
+import com.yucli.agent.Agent;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ public class TuiContext {
     private String modeName = "ReAct";
     private Path selectedFile;
     private final List<String> chatHistory = new ArrayList<>();
+    private Agent agent;
 
     private int activeTabIndex = 0;
     private Label modelLabel;
@@ -72,5 +74,13 @@ public class TuiContext {
 
     public void onAction(Consumer<String> listener) {
         actionListeners.add(listener);
+    }
+
+    public Agent getAgent() {
+        return agent;
+    }
+
+    public void setAgent(Agent agent) {
+        this.agent = agent;
     }
 }

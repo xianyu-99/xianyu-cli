@@ -3,8 +3,11 @@ package com.yucli.tui;
 import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.TextColor;
 import com.googlecode.lanterna.gui2.*;
+import com.googlecode.lanterna.input.KeyStroke;
+import com.googlecode.lanterna.input.KeyType;
 import com.googlecode.lanterna.screen.Screen;
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
+import com.yucli.agent.Agent;
 
 import java.io.IOException;
 
@@ -27,16 +30,46 @@ public class TuiApplication {
     private final ConfigPanel configPanel;
 
     public TuiApplication() throws IOException {
+        this(null);
+    }
+
+    public TuiApplication(Agent agent) throws IOException {
         DefaultTerminalFactory factory = new DefaultTerminalFactory();
         factory.setTerminalEmulatorTitle("YuCLI TUI");
         Screen screen = factory.createScreen();
         screen.startScreen();
 
         this.gui = new MultiWindowTextGUI(screen);
-        this.mainWindow = new BasicWindow("YuCLI TUI v16.0.0");
+        this.mainWindow = new BasicWindow("YuCLI TUI v16.0.0") {
+            @Override
+            public boolean handleInput(KeyStroke keyStroke) {
+                if (keyStroke.getKeyType() == KeyType.F1) {
+                    switchTab("chat");
+                    return true;
+                }
+                if (keyStroke.getKeyType() == KeyType.F2) {
+                    switchTab("code");
+                    return true;
+                }
+                if (keyStroke.getKeyType() == KeyType.F3) {
+                    switchTab("config");
+                    return true;
+                }
+                if (keyStroke.getKeyType() == KeyType.F5) {
+                    context.fireAction("send");
+                    return true;
+                }
+                if (keyStroke.getKeyType() == KeyType.F10) {
+                    stop();
+                    return true;
+                }
+                return super.handleInput(keyStroke);
+            }
+        };
         this.mainWindow.setHints(java.util.Collections.singletonList(Window.Hint.FULL_SCREEN));
 
         this.context = new TuiContext();
+        this.context.setAgent(agent);
 
         // 预创建面板
         this.chatPanel = new ChatPanel(context);
@@ -149,11 +182,18 @@ public class TuiApplication {
     }
 
     /**
-     * 启动 TUI 模式。
+     * 启动 TUI 模式（无 Agent）。
      */
     public static void launch() {
+        launch(null);
+    }
+
+    /**
+     * 启动 TUI 模式，传入已初始化的 Agent。
+     */
+    public static void launch(Agent agent) {
         try {
-            TuiApplication app = new TuiApplication();
+            TuiApplication app = new TuiApplication(agent);
             app.run();
         } catch (IOException e) {
             System.err.println("TUI 启动失败: " + e.getMessage());

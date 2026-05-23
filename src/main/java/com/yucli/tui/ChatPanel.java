@@ -3,8 +3,11 @@ package com.yucli.tui;
 import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.TextColor;
 import com.googlecode.lanterna.gui2.*;
+import com.yucli.agent.Agent;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 对话面板：展示聊天历史与输入框。
@@ -15,10 +18,16 @@ public class ChatPanel {
     private final Panel panel;
     private final Panel historyPanel;
     private final TextBox inputBox;
+    private final ExecutorService executor;
 
     public ChatPanel(TuiContext context) {
         this.context = context;
         this.panel = new Panel(new BorderLayout());
+        this.executor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "YuCLI-tui-agent-runner");
+            t.setDaemon(true);
+            return t;
+        });
 
         // 历史消息区域
         this.historyPanel = new Panel(new LinearLayout(Direction.VERTICAL));
@@ -34,15 +43,7 @@ public class ChatPanel {
         this.inputBox.setCaretWarp(true);
 
         inputArea.addComponent(inputBox, BorderLayout.Location.CENTER);
-        Button sendBtn = new Button("发送", () -> {
-            String text = inputBox.getText().trim();
-            if (!text.isEmpty()) {
-                context.addChatMessage("user", text);
-                context.fireAction("send:" + text);
-                inputBox.setText("");
-                refreshHistory();
-            }
-        });
+        Button sendBtn = new Button("发送", this::doSend);
         inputArea.addComponent(sendBtn, BorderLayout.Location.RIGHT);
         panel.addComponent(inputArea, BorderLayout.Location.BOTTOM);
 
@@ -83,6 +84,45 @@ public class ChatPanel {
      */
     public String getInputText() {
         return inputBox.getText();
+    }
+
+    /**
+     * 发送用户输入并在后台线程中调用 Agent。
+     */
+    private void doSend() {
+        String text = inputBox.getText().trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        context.addChatMessage("user", text);
+        context.fireAction("send:" + text);
+        inputBox.setText("");
+        refreshHistory();
+
+        Agent agent = context.getAgent();
+        if (agent == null) {
+            appendAgentMessage("❌ Agent 未初始化，无法处理请求。");
+            return;
+        }
+
+        // 禁用输入，防止重复发送
+        inputBox.setEnabled(false);
+
+        executor.submit(() -> {
+            try {
+                String response = agent.run(text);
+                // 回到 UI 线程更新界面
+                panel.getTextGUI().getGUIThread().invokeLater(() -> {
+                    appendAgentMessage(response);
+                    inputBox.setEnabled(true);
+                });
+            } catch (Exception e) {
+                panel.getTextGUI().getGUIThread().invokeLater(() -> {
+                    appendAgentMessage("❌ Agent 执行异常: " + e.getMessage());
+                    inputBox.setEnabled(true);
+                });
+            }
+        });
     }
 
     private Label createMessageLabel(String msg) {

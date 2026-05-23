@@ -201,7 +201,7 @@ public class Main {
                     }
                     case TUI_LAUNCH -> {
                         System.out.println("🖥️ 启动 TUI 模式...\n");
-                        TuiApplication.launch();
+                        TuiApplication.launch(reactAgent);
                         System.out.println("👤 已退出 TUI，回到 CLI 模式。\n");
                         continue;
                     }
