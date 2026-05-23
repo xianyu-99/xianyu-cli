@@ -47,13 +47,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * YuCLI v14.0.0 - MCP-Native Agent CLI
- * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换、MCP、浏览器自动化
- * 第 14 期新增：CDP 会话复用、多 Tab 管理、登录态访问、/browser CLI 命令
+ * YuCLI v15.0.0 - MCP-Native Agent CLI
+ * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换、MCP、浏览器自动化、Skill 系统
+ * 第 15 期新增：Skill 加载机制、web-access 内置 Skill、Jina Reader fallback、/skill CLI 命令
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.yucli.policy
  */
 public class Main {
-    private static final String VERSION = "14.0.0";
+    private static final String VERSION = "15.0.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";
@@ -150,6 +150,13 @@ public class Main {
 
             Agent reactAgent = new Agent(llmClient, hitlToolRegistry);
             reactAgent.setMcpServerManager(mcpServerManager);
+
+            com.yucli.skill.SkillRegistry skillRegistry = new com.yucli.skill.SkillRegistry();
+            Path userSkillsDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
+            if (Files.isDirectory(userSkillsDir)) {
+                skillRegistry.loadUserSkills(userSkillsDir);
+            }
+            reactAgent.setSkillRegistry(skillRegistry);
             System.out.println("🔄 使用 ReAct 模式\n");
             boolean nextTaskUsePlanMode = false;
             boolean nextTaskUseTeamMode = false;
@@ -188,7 +195,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /clear /context /memory /memory clear /save /index /search /graph /exit\n");
                         continue;
                     }
                     case EXIT -> {
@@ -213,6 +220,42 @@ public class Main {
                     }
                     case BROWSER_STATUS -> {
                         System.out.println(reactAgent.getToolRegistry().getBrowserStatus());
+                        System.out.println();
+                        continue;
+                    }
+                    case SKILL_LIST -> {
+                        System.out.println(reactAgent.getSkillRegistry().getStatusText());
+                        System.out.println();
+                        continue;
+                    }
+                    case SKILL_ON -> {
+                        String skillName = command.payload();
+                        if (skillName == null || skillName.isEmpty()) {
+                            System.out.println("❌ 请提供 Skill 名称，例如 /skill on web-access\n");
+                        } else {
+                            reactAgent.getSkillRegistry().enable(skillName);
+                            System.out.println("✅ Skill '" + skillName + "' 已启用\n");
+                        }
+                        continue;
+                    }
+                    case SKILL_OFF -> {
+                        String skillName = command.payload();
+                        if (skillName == null || skillName.isEmpty()) {
+                            System.out.println("❌ 请提供 Skill 名称，例如 /skill off web-access\n");
+                        } else {
+                            reactAgent.getSkillRegistry().disable(skillName);
+                            System.out.println("❌ Skill '" + skillName + "' 已禁用\n");
+                        }
+                        continue;
+                    }
+                    case SKILL_RELOAD -> {
+                        reactAgent.getSkillRegistry().reload();
+                        Path reloadDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
+                        if (Files.isDirectory(reloadDir)) {
+                            reactAgent.getSkillRegistry().loadUserSkills(reloadDir);
+                        }
+                        System.out.println("🔄 Skill 已重新加载\n");
+                        System.out.println(reactAgent.getSkillRegistry().getStatusText());
                         System.out.println();
                         continue;
                     }
@@ -810,6 +853,7 @@ public class Main {
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
+                "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
                 "输入 '/graph <类名>' 查看代码关系图谱",

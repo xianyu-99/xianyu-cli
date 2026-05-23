@@ -35,6 +35,7 @@ public class Agent {
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private int accumulatedCachedTokens;
     private com.yucli.mcp.McpServerManager mcpServerManager;
+    private com.yucli.skill.SkillRegistry skillRegistry;
 
     /**
      * 构建系统提示词，根据上下文模式动态调整工具描述。
@@ -65,6 +66,12 @@ public class Agent {
                 }
                 resourcesIndex = rb.toString();
             }
+        }
+
+        // Skill metadata 注入
+        String skillSection = "";
+        if (skillRegistry != null) {
+            skillSection = skillRegistry.buildMetadataSection();
         }
 
         return """
@@ -122,8 +129,9 @@ public class Agent {
             如果提供了相关记忆，请参考其中的信息来辅助决策。
             %s
             %s
+            %s
             请用中文回复用户。
-            """.formatted(searchTopK, longModeHint, resourcesIndex);
+            """.formatted(searchTopK, longModeHint, resourcesIndex, skillSection);
     }
 
     public Agent(LlmClient llmClient) {
@@ -148,6 +156,14 @@ public class Agent {
         this.mcpServerManager = mcpServerManager;
     }
 
+    public void setSkillRegistry(com.yucli.skill.SkillRegistry skillRegistry) {
+        this.skillRegistry = skillRegistry;
+    }
+
+    public com.yucli.skill.SkillRegistry getSkillRegistry() {
+        return skillRegistry;
+    }
+
     /**
      * 运行 Agent 循环
      */
@@ -160,8 +176,18 @@ public class Agent {
         String memoryContext = memoryManager.buildContextForQuery(userInput, 500);
         updateSystemPromptWithMemory(memoryContext);
 
+        // Skill 触发词匹配：命中时展开指令并追加到用户输入前
+        String effectiveInput = userInput;
+        if (skillRegistry != null) {
+            String expanded = skillRegistry.expandMatchingSkills(userInput);
+            if (expanded != null) {
+                effectiveInput = expanded + "\n\n用户原始输入：\n" + userInput;
+                log.info("Skill expanded for input: matched skills");
+            }
+        }
+
         // 添加用户输入到历史（保持原文，不污染 user message）
-        conversationHistory.add(LlmClient.Message.user(userInput));
+        conversationHistory.add(LlmClient.Message.user(effectiveInput));
         StringBuilder reasoningTranscript = new StringBuilder();
         StreamRenderer streamRenderer = new StreamRenderer();
 

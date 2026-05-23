@@ -112,5 +112,39 @@ public class WebFetcher {
         return out.toByteArray();
     }
 
+    /**
+     * 通过 Jina Reader (r.jina.ai) 抓取页面，返回 Markdown。
+     * 作为本地 readability 失败时的降级方案。
+     */
+    public RawResponse fetchViaJina(String originalUrl) throws IOException {
+        String jinaUrl = "https://r.jina.ai/http://" + originalUrl.replaceFirst("^https?://", "");
+        if (originalUrl.startsWith("https://")) {
+            jinaUrl = "https://r.jina.ai/https://" + originalUrl.substring(8);
+        }
+        Request request = new Request.Builder()
+                .url(jinaUrl)
+                .header("Accept", "text/plain,*/*")
+                .header("User-Agent", "YuCLI-jina-reader/1.0")
+                .get()
+                .build();
+
+        log.info("web_fetch jina fallback: GET {}", jinaUrl);
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("Jina Reader HTTP " + response.code());
+            }
+            ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException("Jina Reader 响应体为空");
+            }
+            String text = body.string();
+            boolean truncated = text.length() > maxBytes;
+            if (truncated) {
+                text = text.substring(0, maxBytes);
+            }
+            return new RawResponse(originalUrl, text, "text/markdown", "UTF-8", truncated);
+        }
+    }
+
     public record RawResponse(String url, String body, String contentType, String charset, boolean truncated) {}
 }

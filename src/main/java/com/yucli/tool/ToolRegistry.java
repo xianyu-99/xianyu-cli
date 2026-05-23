@@ -484,6 +484,18 @@ public class ToolRegistry {
             WebFetcher.RawResponse raw = webFetcher().fetch(url.trim());
             HtmlExtractor.Extracted extracted = htmlExtractor().extract(raw.body(), raw.url());
             String markdown = extracted.markdown();
+
+            // Jina Reader fallback: 本地 readability 返回空正文时尝试
+            if (markdown.isBlank() && !raw.body().isBlank()) {
+                try {
+                    WebFetcher.RawResponse jinaRaw = webFetcher().fetchViaJina(url.trim());
+                    markdown = jinaRaw.body();
+                    extracted = new HtmlExtractor.Extracted(extracted.title(), markdown);
+                } catch (Exception jinaEx) {
+                    // Jina 也失败，保留空正文 + 边界提示
+                }
+            }
+
             int originalLength = markdown.length();
             boolean truncated = false;
             if (maxChars > 0 && markdown.length() > maxChars) {

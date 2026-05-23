@@ -28,7 +28,11 @@ final class CliCommandParser {
         MCP_ENABLE,
         MCP_RESOURCES,
         MCP_PROMPTS,
-        BROWSER_STATUS
+        BROWSER_STATUS,
+        SKILL_LIST,
+        SKILL_ON,
+        SKILL_OFF,
+        SKILL_RELOAD
     }
 
     record ParsedCommand(CommandType type, String payload) {
@@ -187,6 +191,22 @@ final class CliCommandParser {
 
         if (trimmed.equalsIgnoreCase("/browser")) {
             return new ParsedCommand(CommandType.BROWSER_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/skill") || trimmed.equalsIgnoreCase("/skill list")) {
+            return new ParsedCommand(CommandType.SKILL_LIST, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/skill on ", 0, 10)) {
+            return new ParsedCommand(CommandType.SKILL_ON, trimmed.substring(10).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/skill off ", 0, 11)) {
+            return new ParsedCommand(CommandType.SKILL_OFF, trimmed.substring(11).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/skill reload")) {
+            return new ParsedCommand(CommandType.SKILL_RELOAD, null);
         }
 
         if (trimmed.startsWith("/")) {

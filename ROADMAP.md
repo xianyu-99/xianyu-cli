@@ -370,7 +370,9 @@
 
 ---
 
-## 第15期：Skill 系统 + web-access Skill
+## 第15期：Skill 系统 + web-access Skill ✅
+
+**已完成**
 
 **前置依赖**：第 9 期 web 工具、第 13 期 Chrome DevTools MCP、第 14 期 CDP 会话复用全部就绪
 
@@ -379,9 +381,9 @@
 **功能迭代**：
 - Skill 加载机制：扫描目录，解析 `SKILL.md`（frontmatter + 触发词 + 指令体）
 - Skill 注册：启动时把每个 Skill 的 metadata 注入 system prompt，触发词命中时再展开完整指令
-- Skill 目录约定：`<root>/SKILL.md`、可选 `scripts/`、可选 `references/`
+- Skill 目录约定：`<skills-dir>/<name>/SKILL.md`、可选 `scripts/`、可选 `references/`
 - 内置 web-access Skill：把第 9–14 期的联网能力打包成「何时搜索 / 何时抓取 / 何时开浏览器 / 何时复用登录态」的决策手册，附带站点经验目录
-- 集成 Jina Reader 作为 fallback：`web_fetch` 拿不到正文（SPA / 防爬墙）时，可选降级到 `r.jina.ai/<url>` 拿干净 Markdown，与本地 readability 形成「先本地、再第三方、最后浏览器」的三档兜底
+- 集成 Jina Reader 作为 fallback：`web_fetch` 本地 readability 返回空正文（SPA / 防爬墙）时，自动降级到 `r.jina.ai/<url>` 拿干净 Markdown，形成「先本地、再第三方、最后浏览器」的三档兜底
 - CLI 命令：`/skill list`、`/skill on <name>`、`/skill off <name>`、`/skill reload`
 - Skill 与 HITL 协同：Skill 内调用危险工具仍走 HITL 审批，不绕过
 
