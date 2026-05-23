@@ -1,4 +1,4 @@
-# PaiCLI 迭代路线图（16 期）
+﻿# YuCLI 迭代路线图（16 期）
 
 从零开始，逐步构建生产级 Java Agent CLI
 
@@ -119,13 +119,13 @@
 **HITL 增强（后续补丁，归在本期叙事下）**：
 - `PathGuard` 路径围栏：`read_file` / `write_file` / `list_dir` / `create_project` 强制限定在项目根之内，拦截绝对路径越界、`..` 穿越、符号链接逃逸
 - `CommandGuard` 命令快速拒绝：HITL 之前的 fast-fail 黑名单（sudo / rm -rf 全盘 / mkfs / dd 写裸设备 / fork bomb / curl|sh / find / / chmod 777 / / shutdown），减少 HITL 弹窗骚扰
-- `AuditLog` 操作审计链：危险工具调用按天写 JSONL 到 `~/.paicli/audit/`，含 `outcome (allow|deny|error)` 与 `approver (hitl|policy|none)`
+- `AuditLog` 操作审计链：危险工具调用按天写 JSONL 到 `~/.YuCLI/audit/`，含 `outcome (allow|deny|error)` 与 `approver (hitl|policy|none)`
 - `write_file` 单文件 5MB 上限
 - CLI 命令：`/policy` 看安全策略状态、`/audit [N]` 看最近审计
 
 **为什么不叫沙箱**：
 - 真正的沙箱是隔离的执行环境（Docker / microVM / chroot），本地 Agent CLI（参考 Claude Code / Cursor / Aider）默认都不做沙箱——沙箱削弱 Agent 能力、给虚假安全感、体验更差
-- PaiCLI 的安全模型是 **HITL + 路径校验 + 命令快速拒绝 + 审计**，不是隔离
+- YuCLI 的安全模型是 **HITL + 路径校验 + 命令快速拒绝 + 审计**，不是隔离
 - 想做容器隔离的请参考 Pro 升级版本章节，或自行实现 `SandboxDriver` 接口
 
 **核心知识点**：
@@ -172,7 +172,7 @@
 - `AbstractOpenAiCompatibleClient` 基类：共享 SSE 流式解析、请求构建、工具调用增量合并逻辑
 - `GLMClient` / `DeepSeekClient` 瘦子类：各约 20 行，仅提供 API URL、模型名、API Key
 - 运行时模型切换：`/model glm` `/model deepseek` 命令实时切换当前对话模型
-- 配置持久化：`~/.paicli/config.json` 存储默认模型，支持 `.env` 回退读取 API Key
+- 配置持久化：`~/.YuCLI/config.json` 存储默认模型，支持 `.env` 回退读取 API Key
 - `LlmClientFactory` 工厂：根据 provider 名称和配置创建对应客户端
 
 **核心知识点**：
@@ -210,7 +210,7 @@
 
 **已完成**
 
-**目标**：把 PaiCLI 接入 MCP 生态。stdio 子进程 server 与 Streamable HTTP 远程 server 都能用，工具自动注册到 ToolRegistry，与 HITL / AuditLog 协同。
+**目标**：把 YuCLI 接入 MCP 生态。stdio 子进程 server 与 Streamable HTTP 远程 server 都能用，工具自动注册到 ToolRegistry，与 HITL / AuditLog 协同。
 
 **功能迭代**：
 - 手写 `JsonRpcClient`：JSON-RPC 2.0 客户端，请求-响应配对、通知、错误码、超时
@@ -220,7 +220,7 @@
 - `initialize` 握手 + capabilities 协商 + protocol version negotiation
 - `tools/list` + `tools/call`：工具按 `mcp__{server}__{tool}` 前缀注册到 `ToolRegistry`
 - MCP 返回 `content` 数组扁平化（text 拼接，image / resource 给 fallback 提示）
-- 配置文件：`~/.paicli/mcp.json`（用户级）+ `.paicli/mcp.json`（项目级，可入 git），格式与 Claude Code `claude_desktop_config.json` 兼容
+- 配置文件：`~/.YuCLI/mcp.json`（用户级）+ `.YuCLI/mcp.json`（项目级，可入 git），格式与 Claude Code `claude_desktop_config.json` 兼容
 - 启动时 eager 并行启动所有 server（复用第 7 期并行调度）
 - **默认开启**，`/mcp disable <name>` 关单个
 - HITL + AuditLog 集成：MCP 工具默认走 HITL，audit `tool` 字段带 `mcp__` 前缀
@@ -374,7 +374,7 @@
 
 **前置依赖**：第 9 期 web 工具、第 13 期 Chrome DevTools MCP、第 14 期 CDP 会话复用全部就绪
 
-**目标**：做出 PaiCLI 自己的 Skill 加载机制，把零散的工具与决策指引打包成可复用单元，并以 web-access 作为首个落地 Skill
+**目标**：做出 YuCLI 自己的 Skill 加载机制，把零散的工具与决策指引打包成可复用单元，并以 web-access 作为首个落地 Skill
 
 **功能迭代**：
 - Skill 加载机制：扫描目录，解析 `SKILL.md`（frontmatter + 触发词 + 指令体）

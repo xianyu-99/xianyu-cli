@@ -1,4 +1,4 @@
-# PaiCLI 项目架构全景分析
+﻿# YuCLI 项目架构全景分析
 
 > **项目定位**：面向商业使用的 Java Agent CLI 产品，对标 Claude Code。从 ReAct 循环持续演进到完整 Agent 产品形态，已完成 11 期迭代（v11.0.0），路线图规划到第 16 期。
 
@@ -8,7 +8,7 @@
 
 | 维度 | 说明 |
 |------|------|
-| 项目名 | PaiCLI |
+| 项目名 | YuCLI |
 | 语言 | Java 17+ |
 | 构建工具 | Maven |
 | 当前版本 | v11.0.0 |
@@ -36,7 +36,7 @@
 ## 二、项目目录结构
 
 ```
-paicli-main/
+YuCLI-main/
 ├── AGENTS.md                    # Agent 协作入口文档
 ├── CLAUDE.md                    # 兼容保留文件
 ├── README.md                    # 项目说明
@@ -47,7 +47,7 @@ paicli-main/
 │   ├── phase-10-mcp-core.md     # MCP 核心设计文档
 │   └── phase-11-mcp-advanced.md # MCP 高级能力设计文档
 ├── demo/                        # 示例 Spring Boot 项目（用于 RAG 测试）
-├── src/main/java/com/paicli/
+├── src/main/java/com/YuCLI/
 │   ├── agent/                   # Agent 核心
 │   │   ├── Agent.java           # ReAct 单 Agent 循环
 │   │   ├── AgentBudget.java     # Token/轮数/停滞三重预算
@@ -61,7 +61,7 @@ paicli-main/
 │   │   ├── CliCommandParser.java
 │   │   └── PlanReviewInputParser.java
 │   ├── config/
-│   │   └── PaiCliConfig.java    # 全局配置
+│   │   └── YuCLIConfig.java    # 全局配置
 │   ├── hitl/                    # Human-In-The-Loop
 │   │   ├── ApprovalPolicy.java  # 审批策略（危险工具定义）
 │   │   ├── ApprovalRequest.java
@@ -170,7 +170,7 @@ paicli-main/
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    PaiCLI Agent 对话流程图                                  │
+│                                    YuCLI Agent 对话流程图                                  │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                          │
 │                               ┌─────────────────────┐                                    │
@@ -460,8 +460,8 @@ ToolRegistry.executeTool(name, argumentsJson)
 │  McpServerManager (生命周期管理)                          │
 │      │                                                   │
 │      ├── McpConfigLoader (读取 mcp.json)                 │
-│      │    用户级: ~/.paicli/mcp.json                     │
-│      │    项目级: .paicli/mcp.json                       │
+│      │    用户级: ~/.YuCLI/mcp.json                     │
+│      │    项目级: .YuCLI/mcp.json                       │
 │      │    格式兼容: claude_desktop_config.json            │
 │      │                                                   │
 │      ├── McpTransport (传输层)                           │
@@ -546,7 +546,7 @@ ToolRegistry.executeTool(name, argumentsJson)
 │  │ · 内存 Map 存储   │  │ · JSON 文件持久化│            │
 │  │ · 三种 Entry 类型:│  │ · FACT 类型条目 │            │
 │  │   CONVERSATION   │  │ · 位置:           │            │
-│  │   TOOL_RESULT    │  │   ~/.paicli/memory│            │
+│  │   TOOL_RESULT    │  │   ~/.YuCLI/memory│            │
 │  │   FACT           │  │   /long_term_     │            │
 │  │                   │  │   memory.json     │            │
 │  │ 存储策略:         │  │                  │            │
@@ -693,7 +693,7 @@ MemoryManager 层
 │  │ Layer 5: AuditLog (操作审计)                         │ │
 │  │                                                      │ │
 │  │  · JSONL 格式，按天分文件 audit-YYYY-MM-DD.jsonl     │ │
-│  │  · 默认目录: ~/.paicli/audit/                        │ │
+│  │  · 默认目录: ~/.YuCLI/audit/                        │ │
 │  │  · 记录字段:                                          │ │
 │  │    - timestamp: ISO 时间戳                            │ │
 │  │    - tool: 工具名称                                  │ │
@@ -792,7 +792,7 @@ MemoryManager 层
 
 ```
                            ┌──────────────────┐
-                           │    ~/paicli/     │
+                           │    ~/YuCLI/     │
                            │                  │
                            │  memory/         │
                            │  └ long_term_    │
@@ -811,7 +811,7 @@ MemoryManager 层
                            └──────────────────┘
                                   ↕ (读写)
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                            PaiCLI Agent                                 │
+│                            YuCLI Agent                                 │
 │                                                                         │
 │  用户输入 ──→ [Agent模式选择] ──→ [Memory注入] ──→ [LLM推理]            │
 │                                                 │                       │

@@ -28,7 +28,7 @@ Enable the Agent to control a browser for handling pages that require JavaScript
 After evaluating three approaches (jvppeteer, Selenium 4 + CDP, hand-written WebSocket + CDP), we chose **Option C: hand-written WebSocket + CDP** with the following rationale:
 
 1. **Zero additional dependencies**: Reuses existing Jackson 2.16 + Java 17 built-in java.net.http.WebSocket
-2. **Aligns with PaiCLI educational positioning**: Hand-written protocol stacks are a core project theme (already done for MCP stdio + Streamable HTTP in Phases 10-11)
+2. **Aligns with YuCLI educational positioning**: Hand-written protocol stacks are a core project theme (already done for MCP stdio + Streamable HTTP in Phases 10-11)
 3. **Natural Phase 14衔接**: Reusing existing Chrome instances only requires changing ChromeDiscovery connection logic
 4. **Controllable complexity**: Only 5-6 stable CDP commands needed (Page.navigate, Page.captureScreenshot, Runtime.evaluate, Input.dispatchMouseEvent, DOM.getDocument)
 5. **No dependency risks**: Avoids Jackson version conflicts (jvppeteer uses 2.18) and Selenium's strict Chrome version binding
@@ -38,7 +38,7 @@ After evaluating three approaches (jvppeteer, Selenium 4 + CDP, hand-written Web
 ## 2. Module Structure
 
 ```
-src/main/java/com/paicli/browser/
+src/main/java/com/YuCLI/browser/
 ├── CdpWebSocketClient.java      # WebSocket connection + JSON-RPC request/response pairing
 ├── ChromeLauncher.java          # Chrome process lifecycle (start/stop/discovery)
 ├── ChromeDiscovery.java         # HTTP /json/list /json/version /json/new queries
@@ -48,7 +48,7 @@ src/main/java/com/paicli/browser/
 
 ### 2.1 Package Design Rationale
 
-- **New package com.paicli.browser**: Browser automation is a distinct capability domain, separate from web fetching (com.paicli.web) and MCP infrastructure (com.paicli.mcp)
+- **New package com.yucli.browser**: Browser automation is a distinct capability domain, separate from web fetching (com.yucli.web) and MCP infrastructure (com.yucli.mcp)
 - **No BrowserMcpServer.java**: Unlike the research recommendation, we chose **built-in tools** (registered directly in ToolRegistry) rather than a separate stdio MCP Server. This avoids an extra process and aligns with how other built-in tools (web_search, web_fetch) are structured
 - **No domain subpackage**: With only 7 tools, splitting into domains/PageDomain.java etc. would be premature abstraction. CdpSession encapsulates all domain operations
 
@@ -293,7 +293,7 @@ These should trigger enhanced HITL warnings or automatic refusal.
 
 ### 6.3 Browser Isolation
 
-- Each PaiCLI session gets its own Chrome instance (or connection)
+- Each YuCLI session gets its own Chrome instance (or connection)
 - --user-data-dir uses temporary directory by default
 - No cookie/session sharing between sessions
 - Phase 14 will support intentional login state reuse
