@@ -7,7 +7,7 @@
 
     <groupId>com.yucli</groupId>
     <artifactId>yucli</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>19.0.0</version>
     <packaging>jar</packaging>
 
     <name>YuCLI</name>

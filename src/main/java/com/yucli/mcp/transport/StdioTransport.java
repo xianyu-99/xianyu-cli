@@ -43,7 +43,11 @@ public class StdioTransport implements McpTransport {
         if (env != null && !env.isEmpty()) {
             builder.environment().putAll(env);
         }
-        this.process = builder.start();
+        try {
+            this.process = builder.start();
+        } catch (IOException e) {
+            throw new IOException("Failed to start MCP process [" + String.join(" ", commandLine) + "]: " + e.getMessage(), e);
+        }
         this.stdin = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
         startStdoutReader();
         startStderrReader();

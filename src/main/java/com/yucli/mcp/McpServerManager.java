@@ -211,7 +211,8 @@ public class McpServerManager implements AutoCloseable {
                 for (String prompt : prompts) {
                     allPrompts.add("[" + server.name() + "] " + prompt);
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                System.err.println("[MCP] Failed to list prompts from server: " + e.getMessage());
             }
         }
         return allPrompts;
@@ -229,7 +230,7 @@ public class McpServerManager implements AutoCloseable {
             List<McpResourceDescriptor> resources = refreshResources(server);
             return McpClient.formatResources(resources);
         } catch (Exception e) {
-            return "读取 MCP resources 失败: " + e.getMessage();
+            return "读取 MCP resources 失败 (" + serverName + "): " + e.getMessage();
         }
     }
 
@@ -252,7 +253,7 @@ public class McpServerManager implements AutoCloseable {
             }
             return sb.toString().trim();
         } catch (Exception e) {
-            return "读取 MCP prompts 失败: " + e.getMessage();
+            return "读取 MCP prompts 失败 (" + serverName + "): " + e.getMessage();
         }
     }
 
@@ -331,7 +332,11 @@ public class McpServerManager implements AutoCloseable {
             restartCounts.remove(server.name());
         } catch (Exception e) {
             server.close();
-            server.errorMessage(e.getMessage());
+            Throwable root = e;
+            while (root.getCause() != null) root = root.getCause();
+            server.errorMessage("[" + server.name() + "] " + root.getClass().getSimpleName() + ": " + root.getMessage());
+            System.err.println("[MCP] Server '" + server.name() + "' start failed: " + root.getMessage());
+            e.printStackTrace(System.err);
             server.status(McpServerStatus.ERROR);
         }
     }
@@ -397,7 +402,8 @@ public class McpServerManager implements AutoCloseable {
                 replaceTools(server, client, tools);
                 server.tools(tools);
             } catch (Exception e) {
-                server.errorMessage("tools/list_changed 处理失败: " + e.getMessage());
+                server.errorMessage("[" + server.name() + "] tools/list_changed 处理失败: " + e.getMessage());
+                System.err.println("[MCP] Server '" + server.name() + "' tools/list_changed handler error: " + e.getMessage());
             }
         });
         router.on("notifications/resources/list_changed", ignored -> resourceCache.invalidateServer(server.name()));

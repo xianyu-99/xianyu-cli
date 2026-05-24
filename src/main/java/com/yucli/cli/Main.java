@@ -59,7 +59,7 @@ import java.util.concurrent.TimeUnit;
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.yucli.policy
  */
 public class Main {
-    private static final String VERSION = "16.0.0";
+    private static final String VERSION = "19.0.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";
@@ -145,8 +145,11 @@ public class Main {
                 System.out.println(mcpServerManager.startupSummary());
                 System.out.println();
             } catch (Exception e) {
-                System.out.println("⚠️ MCP 初始化失败: " + e.getMessage());
-                System.out.println("   可检查 ~/.YuCLI/mcp.json 或 .YuCLI/mcp.json\n");
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                System.out.println("⚠️ MCP 初始化失败: " + root.getClass().getSimpleName() + ": " + root.getMessage());
+                System.out.println("   可检查 ~/.YuCLI/mcp.json 或 .YuCLI/mcp.json");
+                e.printStackTrace(System.err);
             }
             LineReader lineReader = LineReaderBuilder.builder()
                     .terminal(terminal)
@@ -166,7 +169,9 @@ public class Main {
                     System.out.println("🔌 已加载 " + pluginCount + " 个插件\n");
                 }
             } catch (Exception e) {
-                System.out.println("⚠️ 插件系统初始化失败: " + e.getMessage() + "\n");
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                System.out.println("⚠️ 插件系统初始化失败: " + root.getClass().getSimpleName() + ": " + root.getMessage() + "\n");
             }
 
             com.yucli.skill.SkillRegistry skillRegistry = new com.yucli.skill.SkillRegistry();
@@ -770,7 +775,8 @@ public class Main {
             if (terminal != null && original != null) {
                 try {
                     terminal.setAttributes(original);
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    System.err.println("Warning: failed to restore terminal attributes: " + e.getMessage());
                 }
             }
             CancellationContext.clear(token);
@@ -807,7 +813,7 @@ public class Main {
                 }
             }
             return decideEscCancel(next, escTail);
-        } catch (Exception ignored) {
+        } catch (IOException | InterruptedException ignored) {
             // 监听是 best-effort；失败不能影响任务执行。
             return false;
         }
@@ -954,7 +960,7 @@ public class Main {
             } finally {
                 terminal.setAttributes(originalAttributes);
             }
-        } catch (Exception e) {
+        } catch (IOException | InterruptedException e) {
             return KeyReadResult.unavailable();
         }
     }
@@ -987,7 +993,7 @@ public class Main {
             } finally {
                 terminal.setAttributes(originalAttributes);
             }
-        } catch (Exception e) {
+        } catch (IOException | InterruptedException e) {
             return null;
         }
     }
@@ -1060,6 +1066,7 @@ public class Main {
                 "输入 '/hitl off' 关闭 HITL 审批",
                 "输入 '/mcp' 查看 MCP server，'/mcp restart|logs|disable|enable <name>' 管理 MCP",
                 "输入 '/mcp resources <name>' 查看 MCP resources，'/mcp prompts <name>' 查看 prompts",
+                "输入 '/mcp auth <server>' 发起 OAuth 认证，'/mcp auth status' 查看认证状态，'/mcp auth revoke <server>' 撤销令牌",
                 "在普通任务里输入 '@server:protocol://path' 可显式引用 MCP resource",
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
@@ -1076,10 +1083,8 @@ public class Main {
                 "输入 '/memory' 查看记忆状态",
                 "输入 '/memory clear' 清空长期记忆",
                 "输入 '/save 事实内容' 手动保存关键事实",
-                "输入 '/session' 查看会话列表，'/session save' 保存当前会话",
-                "输入 '/session load <id>' 加载会话，'/session delete <id>' 删除会话",
-                "输入 '/session export <id> [path]' 导出会话",
-                "输入 '/resume' 恢复上次未关闭的会话",
+                "输入 '/session' 查看会话列表，'/session save' 保存当前会话，'/session load|delete|export <id>' 加载/删除/导出会话",
+                "输入 '/resume' 恢复上次未完成的会话",
                 "输入 '/exit' 或 '/quit' 退出"
         );
     }
