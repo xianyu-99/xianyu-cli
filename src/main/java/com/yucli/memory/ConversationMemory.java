@@ -109,6 +109,13 @@ public class ConversationMemory implements Memory {
     }
 
     /**
+     * 从会话恢复时直接添加压缩摘要
+     */
+    public void storeCompressedSummary(MemoryEntry summary) {
+        compressedSummaries.add(summary);
+    }
+
+    /**
      * 将压缩摘要回注到记忆中（上下文压缩后调用）
      */
     public void injectSummary(MemoryEntry summary) {

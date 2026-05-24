@@ -10,6 +10,8 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 
+import com.yucli.mcp.auth.TokenProvider;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,14 +34,23 @@ public class StreamableHttpTransport implements McpTransport {
     private final Map<String, String> headers;
     private final List<Consumer<JsonNode>> listeners = new CopyOnWriteArrayList<>();
     private volatile String sessionId;
+    private volatile TokenProvider tokenProvider;
 
     public StreamableHttpTransport(String url, Map<String, String> headers) {
         this.url = url;
         this.headers = headers == null ? Map.of() : Map.copyOf(headers);
     }
 
+    public void setTokenProvider(TokenProvider tokenProvider) {
+        this.tokenProvider = tokenProvider;
+    }
+
     @Override
     public void send(JsonNode message) throws IOException {
+        sendWithRetry(message, false);
+    }
+
+    private void sendWithRetry(JsonNode message, boolean retried) throws IOException {
         RequestBody body = RequestBody.create(MAPPER.writeValueAsString(message), JSON);
         Request.Builder builder = new Request.Builder()
                 .url(url)
@@ -51,8 +62,22 @@ public class StreamableHttpTransport implements McpTransport {
         if (sessionId != null && !sessionId.isBlank()) {
             builder.header("Mcp-Session-Id", sessionId);
         }
+        if (tokenProvider != null && tokenProvider.isTokenValid()) {
+            builder.header("Authorization", "Bearer " + tokenProvider.getAccessToken());
+        }
 
         try (Response response = client.newCall(builder.build()).execute()) {
+            if (response.code() == 401 && !retried && tokenProvider != null) {
+                response.close();
+                try {
+                    tokenProvider.refreshToken();
+                } catch (Exception refreshEx) {
+                    throw new IOException("OAuth token 刷新失败: " + refreshEx.getMessage(), refreshEx);
+                }
+                sendWithRetry(message, true);
+                return;
+            }
+
             String newSession = response.header("Mcp-Session-Id");
             if (newSession != null && !newSession.isBlank()) {
                 sessionId = newSession;
@@ -66,8 +91,6 @@ public class StreamableHttpTransport implements McpTransport {
             }
             String contentType = response.header("Content-Type", "");
             String raw = responseBody.string();
-            // notification 路径下 server 可以返回 202 + 空 body 或 200 + 空 body。
-            // 这里 swallow 空响应，避免 Jackson 对空字符串抛 MismatchedInputException。
             if (raw == null || raw.isBlank()) {
                 return;
             }

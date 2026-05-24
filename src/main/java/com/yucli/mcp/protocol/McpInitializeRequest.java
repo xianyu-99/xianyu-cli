@@ -14,9 +14,10 @@ public final class McpInitializeRequest {
         root.put("protocolVersion", PROTOCOL_VERSION);
         ObjectNode capabilities = root.putObject("capabilities");
         capabilities.putObject("tools");
+        capabilities.putObject("sampling");
         ObjectNode clientInfo = root.putObject("clientInfo");
         clientInfo.put("name", "YuCLI");
-        clientInfo.put("version", "11.0.0");
+        clientInfo.put("version", "19.0.0");
         return root;
     }
 }

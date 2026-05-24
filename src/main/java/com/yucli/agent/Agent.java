@@ -74,6 +74,19 @@ public class Agent {
             skillSection = skillRegistry.buildMetadataSection();
         }
 
+        // MCP prompts 注入
+        String mcpPromptsSection = "";
+        if (mcpServerManager != null) {
+            java.util.List<String> mcpPrompts = mcpServerManager.allPrompts();
+            if (!mcpPrompts.isEmpty()) {
+                StringBuilder pb = new StringBuilder("\n\n可用 MCP Prompts（可通过 mcp__{server}__get_prompt 工具获取模板内容）：\n");
+                for (String prompt : mcpPrompts) {
+                    pb.append("- ").append(prompt).append("\n");
+                }
+                mcpPromptsSection = pb.toString();
+            }
+        }
+
         return """
             你是一个智能编程 Agent YuCLI，可以帮助用户完成各种任务。
 
@@ -130,8 +143,9 @@ public class Agent {
             %s
             %s
             %s
+            %s
             请用中文回复用户。
-            """.formatted(searchTopK, longModeHint, resourcesIndex, skillSection);
+            """.formatted(searchTopK, longModeHint, resourcesIndex, mcpPromptsSection, skillSection);
     }
 
     public Agent(LlmClient llmClient) {
