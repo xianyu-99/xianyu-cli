@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import okhttp3.*;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
@@ -140,13 +143,43 @@ public class EmbeddingClient {
     private static String getEnv(String key, String defaultValue) {
         String value = System.getenv(key);
         if (value != null && !value.isEmpty()) {
-            return value;
+            return value.trim();
         }
         value = System.getProperty(key);
         if (value != null && !value.isEmpty()) {
-            return value;
+            return value.trim();
+        }
+        value = readFromDotEnv(key);
+        if (value != null && !value.isEmpty()) {
+            return value.trim();
         }
         return defaultValue;
+    }
+
+    private static String readFromDotEnv(String key) {
+        String configuredDir = System.getProperty("YuCLI.env.dir");
+        java.util.List<File> envFiles = new java.util.ArrayList<>();
+        if (configuredDir != null && !configuredDir.isBlank()) {
+            envFiles.add(new File(configuredDir, ".env"));
+        }
+        envFiles.add(new File(".env"));
+        envFiles.add(new File(System.getProperty("user.home"), ".env"));
+
+        for (File envFile : envFiles) {
+            if (!envFile.exists()) continue;
+            try (BufferedReader reader = new BufferedReader(new FileReader(envFile))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim();
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    if (line.startsWith(key + "=")) {
+                        return line.substring((key + "=").length()).trim();
+                    }
+                }
+            } catch (IOException ignored) {
+            }
+        }
+        return null;
     }
 
     public String getProvider() {
@@ -155,5 +188,13 @@ public class EmbeddingClient {
 
     public String getModel() {
         return model;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public String getApiKey() {
+        return apiKey;
     }
 }

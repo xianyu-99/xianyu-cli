@@ -43,7 +43,7 @@ cat > "$INSTALL_DIR/$SCRIPT_NAME" <<WRAPPER
 #!/usr/bin/env bash
 exec java -jar "$INSTALL_DIR/$JAR_NAME" "\$@"
 WRAPPER
-chmod + "$INSTALL_DIR/$SCRIPT_NAME"
+chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 
 # 5. Add to PATH if needed
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then

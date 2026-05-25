@@ -28,8 +28,8 @@
 - 当前主线：主线规划 19 期。已完成第 1 期 `ReAct`、第 2 期 `Plan-and-Execute + DAG`、第 3 期 `Memory + 上下文工程`、第 4 期 `RAG 检索 + 代码库理解`、第 5 期 `Multi-Agent 协作 + 角色分工`、第 6 期 `HITL 人工审批 + 危险操作拦截`（含 HITL 增强：路径围栏 / 命令快速拒绝 / 操作审计）、第 7 期 `异步执行 + 并行工具调用`、第 8 期 `多模型适配 + 运行时切换`、第 9 期 `联网能力 + Web 工具`、第 10 期 `MCP 协议核心（stdio + Streamable HTTP）`、第 11 期 `MCP 高级能力首批（resources 双轨 + prompts 查看 + 被动通知）`、第 12 期 `长上下文工程`、第 13 期 `Chrome DevTools MCP`、第 14 期 `CDP 会话复用 + 登录态访问`、第 15 期 `Skill 系统 + web-access Skill`、第 16 期 `TUI 产品化`、第 17 期 `OAuth 2.0 认证`、第 18 期 `插件系统`、第 19 期 `会话持久化`
 - 下一步：sampling / recovery / 其他 MCP 增强
 - 当前用户可感知版本：CLI Banner 显示 `v19.0.0`
-- 当前 Maven 产物版本：`pom.xml` 仍是 `1.0-SNAPSHOT`
-- 结论：如果你看到运行界面是 `v11.0.0`，但 Jar 名仍是 `YuCLI-1.0-SNAPSHOT.jar`，这是当前仓库的真实状态，不是你看错
+- 当前 Maven 产物版本：`pom.xml` 为 `19.0.0`
+- 结论：当前 Jar 名应为 `yucli-19.0.0.jar`，CLI Banner 显示 `v19.0.0`
 
 ## 运行前提
 
@@ -78,7 +78,8 @@ Embedding 配置读取顺序（以代码实际行为为准）：
 
 1. 环境变量：`EMBEDDING_PROVIDER`、`EMBEDDING_MODEL`、`EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`
 2. 系统属性（同上）
-3. 默认值：`ollama` / `nomic-embed-text:latest` / `http://localhost:11434`
+3. `.env`：优先 `-DYuCLI.env.dir=/path/to/dir/.env` 所在目录，其次仓库当前目录 `.env`，最后用户主目录 `.env`
+4. 默认值：`ollama` / `nomic-embed-text:latest` / `http://localhost:11434`
 
 日志配置读取顺序（以代码实际行为为准）：
 
@@ -133,7 +134,7 @@ MCP 配置读取顺序（以代码实际行为为准）：
 ```bash
 cp .env.example .env
 mvn clean package
-java -jar target/YuCLI-1.0-SNAPSHOT.jar
+java -jar target/yucli-19.0.0.jar
 mvn clean compile exec:java -Dexec.mainClass="com.yucli.cli.Main"
 mvn test
 ```

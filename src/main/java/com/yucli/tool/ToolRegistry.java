@@ -48,7 +48,8 @@ public class ToolRegistry {
     // browser_navigate / browser_click / browser_type 有副作用，纳入审计。
     private static final Set<String> AUDIT_TOOLS = Set.of(
             "write_file", "execute_command", "create_project",
-            "browser_navigate", "browser_click", "browser_type");
+            "browser_navigate", "browser_click", "browser_type",
+            "browser_evaluate", "browser_tab", "browser_close");
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
     private final Map<String, McpRegisteredTool> mcpTools = new ConcurrentHashMap<>();
     private final Map<String, PluginRegisteredTool> pluginTools = new ConcurrentHashMap<>();
@@ -482,7 +483,7 @@ public class ToolRegistry {
         }
 
         try {
-            WebFetcher.RawResponse raw = webFetcher().fetch(url.trim());
+            WebFetcher.RawResponse raw = webFetcher().fetch(url.trim(), policy);
             HtmlExtractor.Extracted extracted = htmlExtractor().extract(raw.body(), raw.url());
             String markdown = extracted.markdown();
 
@@ -825,7 +826,7 @@ public class ToolRegistry {
 
         Process process = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder("bash", "-c", normalized);
+            ProcessBuilder pb = new ProcessBuilder(shellCommand(normalized));
             pb.directory(new File(projectPath));
             pb.redirectErrorStream(true);
             process = pb.start();
@@ -858,6 +859,14 @@ public class ToolRegistry {
         } finally {
             outputReaderExecutor.shutdownNow();
         }
+    }
+
+    static List<String> shellCommand(String normalizedCommand) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("win")) {
+            return List.of("cmd.exe", "/c", normalizedCommand);
+        }
+        return List.of("bash", "-c", normalizedCommand);
     }
 
     private String readProcessOutput(Process process) throws Exception {

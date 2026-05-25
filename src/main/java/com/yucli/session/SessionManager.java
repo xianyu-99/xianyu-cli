@@ -60,10 +60,13 @@ public class SessionManager {
     }
 
     public void autoSave() {
+        List<SessionMessage> messages = memoryManager.exportToSession();
+        if (currentSession == null && messages.isEmpty()) {
+            return;
+        }
         if (currentSession == null) {
             currentSession = createSession();
         }
-        List<SessionMessage> messages = memoryManager.exportToSession();
         currentSession.setMessages(messages);
         currentSession.setUpdatedAt(System.currentTimeMillis());
         if (currentSession.getTaskSummary() == null || currentSession.getTaskSummary().isEmpty()) {

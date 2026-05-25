@@ -84,7 +84,17 @@ class ApprovalPolicyTest {
         assertTrue(tools.contains("browser_navigate"));
         assertTrue(tools.contains("browser_click"));
         assertTrue(tools.contains("browser_type"));
-        assertEquals(6, tools.size());
+        assertTrue(tools.contains("browser_evaluate"));
+        assertTrue(tools.contains("browser_tab"));
+        assertTrue(tools.contains("browser_close"));
+        assertEquals(9, tools.size());
+    }
+
+    @Test
+    void browserEvaluateRequiresApproval() {
+        assertTrue(ApprovalPolicy.requiresApproval("browser_evaluate"));
+        assertTrue(ApprovalPolicy.requiresApproval("browser_tab"));
+        assertTrue(ApprovalPolicy.requiresApproval("browser_close"));
     }
 
     @Test
@@ -127,7 +137,7 @@ class ApprovalPolicyTest {
     @Test
     void mcpToolStaysOutsideOfBuiltinDangerousTools() {
         // mcp__ 前缀不应污染 DANGEROUS_TOOLS 集合本身（保证 set 含义清晰）
-        assertEquals(6, ApprovalPolicy.getDangerousTools().size());
+        assertEquals(9, ApprovalPolicy.getDangerousTools().size());
         assertFalse(ApprovalPolicy.getDangerousTools().contains("mcp__demo__tool"));
     }
 }

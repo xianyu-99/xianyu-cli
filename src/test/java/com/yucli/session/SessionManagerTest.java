@@ -119,6 +119,15 @@ class SessionManagerTest {
     }
 
     @Test
+    void saveOnExitDoesNotCreateEmptySession() {
+        sessionManager.saveOnExit();
+
+        assertNull(sessionManager.getCurrentSession());
+        assertTrue(sessionManager.listSessions().isEmpty());
+        assertNull(sessionManager.findMostRecentUnclosed());
+    }
+
+    @Test
     void sessionMessageSerialization() {
         SessionMessage msg = new SessionMessage("user", "test content", System.currentTimeMillis(), 10);
         msg.setToolName("test_tool");

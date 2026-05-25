@@ -355,7 +355,7 @@ public class McpServerManager implements AutoCloseable {
         long delayMs = RESTART_BACKOFF_MS[Math.min(count, RESTART_BACKOFF_MS.length - 1)];
         restartCounts.put(server.name(), count + 1);
         System.out.println("⚠️ MCP server " + server.name() + " 异常退出，" + (delayMs / 1000) + " 秒后自动重启 (" + (count + 1) + "/" + MAX_AUTO_RESTARTS + ")");
-        Thread.ofVirtual().name("YuCLI-mcp-restart-" + server.name()).start(() -> {
+        Thread restartThread = new Thread(() -> {
             try {
                 Thread.sleep(delayMs);
             } catch (InterruptedException e) {
@@ -368,7 +368,9 @@ public class McpServerManager implements AutoCloseable {
                     System.out.println("✅ MCP server " + server.name() + " 自动重启成功");
                 }
             }
-        });
+        }, "YuCLI-mcp-restart-" + server.name());
+        restartThread.setDaemon(true);
+        restartThread.start();
     }
 
     private List<McpToolDescriptor> buildToolList(McpServer server, McpClient client) throws IOException {
