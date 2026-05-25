@@ -8,7 +8,10 @@ Write-Host "=== YuCLI Installer ===" -ForegroundColor Cyan
 
 # 1. Check JDK 17+
 try {
-    $javaVersion = java -version 2>&1 | Select-String -Pattern '"(\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+    $javaVersion = cmd /c "java -version 2>&1" |
+        Select-String -Pattern '"(\d+)' |
+        Select-Object -First 1 |
+        ForEach-Object { $_.Matches[0].Groups[1].Value }
     if ([int]$javaVersion -lt 17) {
         Write-Host "Error: JDK 17+ required, found version $javaVersion" -ForegroundColor Red
         exit 1
