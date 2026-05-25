@@ -28,7 +28,7 @@ public class ConversationMemory implements Memory {
     }
 
     @Override
-    public void store(MemoryEntry entry) {
+    public synchronized void store(MemoryEntry entry) {
         entries.put(entry.getId(), entry);
         currentTokens += entry.getTokenCount();
 
@@ -39,12 +39,12 @@ public class ConversationMemory implements Memory {
     }
 
     @Override
-    public Optional<MemoryEntry> retrieve(String id) {
+    public synchronized Optional<MemoryEntry> retrieve(String id) {
         return Optional.ofNullable(entries.get(id));
     }
 
     @Override
-    public List<MemoryEntry> search(String query, int limit) {
+    public synchronized List<MemoryEntry> search(String query, int limit) {
         Set<String> queryTokens = MemoryQueryTokenizer.tokenize(query);
         return entries.values().stream()
                 .filter(entry -> MemoryQueryTokenizer.matches(entry.getContent(), queryTokens))
@@ -53,12 +53,12 @@ public class ConversationMemory implements Memory {
     }
 
     @Override
-    public List<MemoryEntry> getAll() {
+    public synchronized List<MemoryEntry> getAll() {
         return new ArrayList<>(entries.values());
     }
 
     @Override
-    public boolean delete(String id) {
+    public synchronized boolean delete(String id) {
         MemoryEntry removed = entries.remove(id);
         if (removed != null) {
             currentTokens -= removed.getTokenCount();
@@ -68,19 +68,19 @@ public class ConversationMemory implements Memory {
     }
 
     @Override
-    public void clear() {
+    public synchronized void clear() {
         entries.clear();
         currentTokens = 0;
         compressedSummaries.clear();
     }
 
     @Override
-    public int getTokenCount() {
+    public synchronized int getTokenCount() {
         return currentTokens;
     }
 
     @Override
-    public int size() {
+    public synchronized int size() {
         return entries.size();
     }
 
@@ -104,14 +104,21 @@ public class ConversationMemory implements Memory {
     /**
      * 获取已压缩淘汰的记忆摘要
      */
-    public List<MemoryEntry> getCompressedSummaries() {
-        return Collections.unmodifiableList(compressedSummaries);
+    public synchronized List<MemoryEntry> getCompressedSummaries() {
+        return Collections.unmodifiableList(new ArrayList<>(compressedSummaries));
+    }
+
+    /**
+     * 从会话恢复时直接添加压缩摘要
+     */
+    public synchronized void storeCompressedSummary(MemoryEntry summary) {
+        compressedSummaries.add(summary);
     }
 
     /**
      * 将压缩摘要回注到记忆中（上下文压缩后调用）
      */
-    public void injectSummary(MemoryEntry summary) {
+    public synchronized void injectSummary(MemoryEntry summary) {
         // 清空旧的压缩摘要
         compressedSummaries.clear();
         // 将摘要作为新条目插入
@@ -122,14 +129,14 @@ public class ConversationMemory implements Memory {
     /**
      * 获取记忆使用率
      */
-    public double getUsageRatio() {
+    public synchronized double getUsageRatio() {
         return maxTokens > 0 ? (double) currentTokens / maxTokens : 0;
     }
 
     /**
      * 生成记忆状态摘要
      */
-    public String getStatusSummary() {
+    public synchronized String getStatusSummary() {
         return String.format("短期记忆: %d条 / %d tokens (预算: %d, 使用率: %.0f%%, 已压缩: %d条)",
                 entries.size(), currentTokens, maxTokens, getUsageRatio() * 100, compressedSummaries.size());
     }

@@ -1,5 +1,7 @@
 package com.yucli.mcp;
 
+import com.yucli.mcp.auth.McpOAuthClient;
+import com.yucli.mcp.auth.TokenStore;
 import com.yucli.mcp.config.McpConfigLoader;
 import com.yucli.mcp.config.McpServerConfig;
 import com.yucli.mcp.notifications.NotificationRouter;
@@ -35,6 +37,11 @@ public class McpServerManager implements AutoCloseable {
     private final McpConfigLoader configLoader;
     private final Map<String, McpServer> servers = new ConcurrentHashMap<>();
     private final McpResourceCache resourceCache = new McpResourceCache();
+    private final TokenStore tokenStore = new TokenStore();
+    private final ConcurrentHashMap<String, Integer> restartCounts = new ConcurrentHashMap<>();
+    private static final int MAX_AUTO_RESTARTS = 3;
+    private static final long[] RESTART_BACKOFF_MS = {1000, 5000, 15000};
+    private volatile com.yucli.llm.LlmClient llmClient;
 
     public McpServerManager(ToolRegistry toolRegistry, Path projectDir) {
         this(toolRegistry, projectDir, new McpConfigLoader(projectDir));
@@ -44,6 +51,10 @@ public class McpServerManager implements AutoCloseable {
         this.toolRegistry = toolRegistry;
         this.projectDir = projectDir.toAbsolutePath().normalize();
         this.configLoader = configLoader;
+    }
+
+    public void setLlmClient(com.yucli.llm.LlmClient llmClient) {
+        this.llmClient = llmClient;
     }
 
     public void loadConfiguredServers() throws IOException {
@@ -189,6 +200,24 @@ public class McpServerManager implements AutoCloseable {
         return resourceCache.all();
     }
 
+    public List<String> allPrompts() {
+        List<String> allPrompts = new ArrayList<>();
+        for (McpServer server : servers()) {
+            if (server.status() != McpServerStatus.READY || server.client() == null) {
+                continue;
+            }
+            try {
+                List<String> prompts = server.client().listPrompts();
+                for (String prompt : prompts) {
+                    allPrompts.add("[" + server.name() + "] " + prompt);
+                }
+            } catch (Exception e) {
+                System.err.println("[MCP] Failed to list prompts from server: " + e.getMessage());
+            }
+        }
+        return allPrompts;
+    }
+
     public String resources(String serverName) {
         McpServer server = servers.get(serverName);
         if (server == null) {
@@ -201,7 +230,7 @@ public class McpServerManager implements AutoCloseable {
             List<McpResourceDescriptor> resources = refreshResources(server);
             return McpClient.formatResources(resources);
         } catch (Exception e) {
-            return "读取 MCP resources 失败: " + e.getMessage();
+            return "读取 MCP resources 失败 (" + serverName + "): " + e.getMessage();
         }
     }
 
@@ -224,7 +253,7 @@ public class McpServerManager implements AutoCloseable {
             }
             return sb.toString().trim();
         } catch (Exception e) {
-            return "读取 MCP prompts 失败: " + e.getMessage();
+            return "读取 MCP prompts 失败 (" + serverName + "): " + e.getMessage();
         }
     }
 
@@ -268,24 +297,80 @@ public class McpServerManager implements AutoCloseable {
         server.status(McpServerStatus.STARTING);
         server.errorMessage(null);
         try {
-            // 在单 server 启动路径里展开 ${VAR} 与校验 transport，
-            // 单个失败仅标 ERROR，不会阻塞其他 server。
             configLoader.prepare(server.config());
+            McpOAuthClient oauthClient = null;
+            if (server.config().isOauth() && server.config().isHttp()) {
+                oauthClient = new McpOAuthClient(server.name(), server.config(), tokenStore);
+                if (!oauthClient.isTokenValid()) {
+                    System.out.println("OAuth server " + server.name() + " 无有效 token，需要授权。");
+                    try {
+                        oauthClient.authorize();
+                    } catch (Exception e) {
+                        throw new IOException("OAuth 授权失败: " + e.getMessage(), e);
+                    }
+                }
+            }
             McpTransport transport = createTransport(server.config());
+            if (transport instanceof StreamableHttpTransport httpTransport && oauthClient != null) {
+                httpTransport.setTokenProvider(oauthClient);
+            }
             McpClient client = new McpClient(server.name(), transport);
             client.initialize();
             registerNotificationHandlers(server, client);
+            registerSamplingHandler(server, client);
             List<McpToolDescriptor> tools = buildToolList(server, client);
             replaceTools(server, client, tools);
+            // Auto-restart on unexpected exit for stdio servers (register before READY to avoid race)
+            if (transport instanceof StdioTransport stdioTransport) {
+                stdioTransport.onExit(() -> handleUnexpectedExit(server));
+            }
+
             server.client(client);
             server.tools(tools);
             server.markStarted();
             server.status(McpServerStatus.READY);
+            restartCounts.remove(server.name());
         } catch (Exception e) {
             server.close();
-            server.errorMessage(e.getMessage());
+            Throwable root = e;
+            while (root.getCause() != null) root = root.getCause();
+            server.errorMessage("[" + server.name() + "] " + root.getClass().getSimpleName() + ": " + root.getMessage());
+            System.err.println("[MCP] Server '" + server.name() + "' start failed: " + root.getMessage());
+            e.printStackTrace(System.err);
             server.status(McpServerStatus.ERROR);
         }
+    }
+
+    private void handleUnexpectedExit(McpServer server) {
+        if (server.config().isDisabled()) {
+            return;
+        }
+        int count = restartCounts.getOrDefault(server.name(), 0);
+        if (count >= MAX_AUTO_RESTARTS) {
+            server.status(McpServerStatus.ERROR);
+            server.errorMessage("自动重启次数已达上限 (" + MAX_AUTO_RESTARTS + ")，停止重启");
+            System.out.println("⚠️ MCP server " + server.name() + " 自动重启次数已达上限，停止重启");
+            return;
+        }
+        long delayMs = RESTART_BACKOFF_MS[Math.min(count, RESTART_BACKOFF_MS.length - 1)];
+        restartCounts.put(server.name(), count + 1);
+        System.out.println("⚠️ MCP server " + server.name() + " 异常退出，" + (delayMs / 1000) + " 秒后自动重启 (" + (count + 1) + "/" + MAX_AUTO_RESTARTS + ")");
+        Thread restartThread = new Thread(() -> {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            synchronized (this) {
+                start(server);
+                if (server.status() == McpServerStatus.READY) {
+                    System.out.println("✅ MCP server " + server.name() + " 自动重启成功");
+                }
+            }
+        }, "YuCLI-mcp-restart-" + server.name());
+        restartThread.setDaemon(true);
+        restartThread.start();
     }
 
     private List<McpToolDescriptor> buildToolList(McpServer server, McpClient client) throws IOException {
@@ -319,7 +404,8 @@ public class McpServerManager implements AutoCloseable {
                 replaceTools(server, client, tools);
                 server.tools(tools);
             } catch (Exception e) {
-                server.errorMessage("tools/list_changed 处理失败: " + e.getMessage());
+                server.errorMessage("[" + server.name() + "] tools/list_changed 处理失败: " + e.getMessage());
+                System.err.println("[MCP] Server '" + server.name() + "' tools/list_changed handler error: " + e.getMessage());
             }
         });
         router.on("notifications/resources/list_changed", ignored -> resourceCache.invalidateServer(server.name()));
@@ -330,6 +416,61 @@ public class McpServerManager implements AutoCloseable {
             }
         });
         client.onNotification(router);
+    }
+
+    private void registerSamplingHandler(McpServer server, McpClient client) {
+        client.onSamplingRequest(params -> {
+            if (llmClient == null) {
+                throw new RuntimeException("LLM client 未初始化，无法处理 sampling 请求");
+            }
+            try {
+                return handleSamplingRequest(params);
+            } catch (Exception e) {
+                throw new RuntimeException("sampling/createMessage 处理失败: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode handleSamplingRequest(com.fasterxml.jackson.databind.JsonNode params) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode result = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+
+        // Parse messages from params
+        com.fasterxml.jackson.databind.JsonNode messagesNode = params.path("messages");
+        java.util.List<com.yucli.llm.LlmClient.Message> messages = new java.util.ArrayList<>();
+
+        // Add system prompt if provided
+        String systemPrompt = params.path("systemPrompt").asText("");
+        if (!systemPrompt.isBlank()) {
+            messages.add(com.yucli.llm.LlmClient.Message.system(systemPrompt));
+        }
+
+        // Convert MCP messages to LlmClient messages
+        if (messagesNode.isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode msg : messagesNode) {
+                String role = msg.path("role").asText("user");
+                com.fasterxml.jackson.databind.JsonNode contentNode = msg.path("content");
+                String text;
+                if (contentNode.isTextual()) {
+                    text = contentNode.asText();
+                } else if (contentNode.has("text")) {
+                    text = contentNode.path("text").asText();
+                } else {
+                    text = contentNode.toString();
+                }
+                messages.add(new com.yucli.llm.LlmClient.Message(role, text));
+            }
+        }
+
+        // Call local LLM (maxTokens from MCP request not supported by current LlmClient interface)
+        com.yucli.llm.LlmClient.ChatResponse response = llmClient.chat(messages, List.of());
+
+        // Build MCP response
+        result.put("model", llmClient.getModelName());
+        result.put("role", "assistant");
+        com.fasterxml.jackson.databind.node.ObjectNode content = result.putObject("content");
+        content.put("type", "text");
+        content.put("text", response.content() != null ? response.content() : "");
+        return result;
     }
 
     private List<McpResourceDescriptor> refreshResources(McpServer server) throws IOException {
@@ -407,6 +548,59 @@ public class McpServerManager implements AutoCloseable {
             }
             return new ResourceReadResult(text.toString().trim(), firstMimeType);
         }
+    }
+
+    public String authServer(String name) {
+        McpServer server = servers.get(name);
+        if (server == null) {
+            return "未找到 MCP server: " + name;
+        }
+        if (!server.config().isOauth()) {
+            return "MCP server 未配置 OAuth: " + name;
+        }
+        McpOAuthClient oauthClient = new McpOAuthClient(name, server.config(), tokenStore);
+        try {
+            oauthClient.authorize();
+            return "OAuth 授权成功: " + name + "（token 已保存，重启 server 即可使用）";
+        } catch (Exception e) {
+            return "OAuth 授权失败: " + name + " - " + e.getMessage();
+        }
+    }
+
+    public String authStatus() {
+        StringBuilder sb = new StringBuilder("OAuth 认证状态\n");
+        boolean any = false;
+        for (McpServer server : servers()) {
+            if (!server.config().isOauth()) continue;
+            any = true;
+            boolean valid = tokenStore.hasValidToken(server.name());
+            String status = valid ? "已认证" : "未认证";
+            TokenStore.TokenEntry entry = tokenStore.getToken(server.name());
+            String expires = "";
+            if (entry != null && entry.expiresAtEpochSeconds() > 0) {
+                expires = " (过期: " + java.time.Instant.ofEpochSecond(entry.expiresAtEpochSeconds()) + ")";
+            }
+            sb.append(String.format("  %-14s %s%s%n", server.name(), status, expires));
+        }
+        if (!any) {
+            sb.append("  没有配置 OAuth 的 MCP server");
+        }
+        return sb.toString().trim();
+    }
+
+    public String authRevoke(String name) {
+        McpServer server = servers.get(name);
+        if (server == null) {
+            return "未找到 MCP server: " + name;
+        }
+        if (!server.config().isOauth()) {
+            return "MCP server 未配置 OAuth: " + name;
+        }
+        if (!tokenStore.hasValidToken(name) && tokenStore.getToken(name) == null) {
+            return "没有存储的 token: " + name;
+        }
+        tokenStore.removeToken(name);
+        return "已撤销 OAuth token: " + name;
     }
 
     private static String formatDuration(Duration duration) {

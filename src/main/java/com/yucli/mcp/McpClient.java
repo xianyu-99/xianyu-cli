@@ -168,6 +168,10 @@ public class McpClient implements AutoCloseable {
         rpc.onNotification(listener);
     }
 
+    public void onSamplingRequest(java.util.function.Function<JsonNode, JsonNode> handler) {
+        rpc.onRequest("sampling/createMessage", handler);
+    }
+
     public static String formatResources(List<McpResourceDescriptor> resources) {
         if (resources == null || resources.isEmpty()) {
             return "📭 该 MCP server 暂无 resources";

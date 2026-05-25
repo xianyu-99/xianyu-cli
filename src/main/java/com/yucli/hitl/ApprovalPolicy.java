@@ -21,7 +21,10 @@ public class ApprovalPolicy {
             "create_project",
             "browser_navigate",
             "browser_click",
-            "browser_type"
+            "browser_type",
+            "browser_evaluate",
+            "browser_tab",
+            "browser_close"
     );
 
     private ApprovalPolicy() {
@@ -31,7 +34,7 @@ public class ApprovalPolicy {
      * 判断该工具调用是否需要人工确认
      */
     public static boolean requiresApproval(String toolName) {
-        return DANGEROUS_TOOLS.contains(toolName) || isMcpTool(toolName);
+        return DANGEROUS_TOOLS.contains(toolName) || isMcpTool(toolName) || isPluginTool(toolName);
     }
 
     /**
@@ -41,8 +44,9 @@ public class ApprovalPolicy {
         return switch (toolName) {
             case "execute_command" -> "🔴 高危";
             case "write_file", "create_project" -> "🟡 中危";
-            case "browser_navigate", "browser_click", "browser_type" -> "🟡 中危";
-            default -> isMcpTool(toolName) ? "🟡 MCP" : "🟢 安全";
+            case "browser_navigate", "browser_click", "browser_type",
+                    "browser_evaluate", "browser_tab", "browser_close" -> "🟡 中危";
+            default -> isMcpTool(toolName) ? "🟡 MCP" : isPluginTool(toolName) ? "🟡 插件" : "🟢 安全";
         };
     }
 
@@ -57,8 +61,13 @@ public class ApprovalPolicy {
             case "browser_navigate" -> "将打开外部网页，可能触发网络请求和页面加载";
             case "browser_click" -> "将点击页面元素，可能触发页面跳转、提交表单或触发不可预期操作";
             case "browser_type" -> "将在页面输入框中输入文本，可能修改表单内容";
+            case "browser_evaluate" -> "将在页面上下文中执行 JavaScript，可能读取或修改页面状态";
+            case "browser_tab" -> "将管理浏览器标签页，可能打开新页面或关闭现有页面";
+            case "browser_close" -> "将关闭当前浏览器进程并释放会话资源";
             default -> isMcpTool(toolName)
                     ? "将调用外部 MCP server 提供的工具，可能访问网络、文件或第三方服务"
+                    : isPluginTool(toolName)
+                    ? "将调用插件提供的工具，可能执行自定义逻辑"
                     : "安全的只读操作";
         };
     }
@@ -72,6 +81,10 @@ public class ApprovalPolicy {
 
     public static boolean isMcpTool(String toolName) {
         return toolName != null && toolName.startsWith("mcp__");
+    }
+
+    public static boolean isPluginTool(String toolName) {
+        return toolName != null && toolName.startsWith("plugin__");
     }
 
     public static String mcpServerName(String toolName) {

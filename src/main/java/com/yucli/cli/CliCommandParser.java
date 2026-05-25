@@ -28,12 +28,25 @@ final class CliCommandParser {
         MCP_ENABLE,
         MCP_RESOURCES,
         MCP_PROMPTS,
+        MCP_AUTH,
+        MCP_AUTH_STATUS,
+        MCP_AUTH_REVOKE,
         BROWSER_STATUS,
         SKILL_LIST,
         SKILL_ON,
         SKILL_OFF,
         SKILL_RELOAD,
-        TUI_LAUNCH
+        TUI_LAUNCH,
+        PLUGIN_LIST,
+        PLUGIN_ENABLE,
+        PLUGIN_DISABLE,
+        PLUGIN_RELOAD,
+        SESSION_LIST,
+        SESSION_SAVE,
+        SESSION_LOAD,
+        SESSION_DELETE,
+        SESSION_EXPORT,
+        RESUME
     }
 
     record ParsedCommand(CommandType type, String payload) {
@@ -190,6 +203,18 @@ final class CliCommandParser {
             return new ParsedCommand(CommandType.MCP_ENABLE, trimmed.substring(12).trim());
         }
 
+        if (trimmed.equalsIgnoreCase("/mcp auth status")) {
+            return new ParsedCommand(CommandType.MCP_AUTH_STATUS, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/mcp auth revoke ", 0, 17)) {
+            return new ParsedCommand(CommandType.MCP_AUTH_REVOKE, trimmed.substring(17).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/mcp auth ", 0, 10)) {
+            return new ParsedCommand(CommandType.MCP_AUTH, trimmed.substring(10).trim());
+        }
+
         if (trimmed.equalsIgnoreCase("/browser")) {
             return new ParsedCommand(CommandType.BROWSER_STATUS, null);
         }
@@ -212,6 +237,50 @@ final class CliCommandParser {
 
         if (trimmed.equalsIgnoreCase("/tui")) {
             return new ParsedCommand(CommandType.TUI_LAUNCH, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/plugin") || trimmed.equalsIgnoreCase("/plugin list")) {
+            return new ParsedCommand(CommandType.PLUGIN_LIST, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/plugin enable ", 0, 15)) {
+            return new ParsedCommand(CommandType.PLUGIN_ENABLE, trimmed.substring(15).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/plugin disable ", 0, 16)) {
+            return new ParsedCommand(CommandType.PLUGIN_DISABLE, trimmed.substring(16).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/plugin reload")) {
+            return new ParsedCommand(CommandType.PLUGIN_RELOAD, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/session") || trimmed.equalsIgnoreCase("/session list")) {
+            return new ParsedCommand(CommandType.SESSION_LIST, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/session save")) {
+            return new ParsedCommand(CommandType.SESSION_SAVE, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session save ", 0, 14)) {
+            return new ParsedCommand(CommandType.SESSION_SAVE, trimmed.substring(14).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session load ", 0, 14)) {
+            return new ParsedCommand(CommandType.SESSION_LOAD, trimmed.substring(14).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session delete ", 0, 16)) {
+            return new ParsedCommand(CommandType.SESSION_DELETE, trimmed.substring(16).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session export ", 0, 16)) {
+            return new ParsedCommand(CommandType.SESSION_EXPORT, trimmed.substring(16).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/resume")) {
+            return new ParsedCommand(CommandType.RESUME, null);
         }
 
         if (trimmed.startsWith("/")) {

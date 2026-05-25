@@ -203,4 +203,18 @@ class CliCommandParserTest {
         assertEquals("web-access", CliCommandParser.parse("/skill off web-access").payload());
         assertEquals(CliCommandParser.CommandType.SKILL_RELOAD, CliCommandParser.parse("/skill reload").type());
     }
+
+    @Test
+    void parsesPluginCommands() {
+        assertEquals(CliCommandParser.CommandType.PLUGIN_LIST, CliCommandParser.parse("/plugin").type());
+        assertNull(CliCommandParser.parse("/plugin").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_LIST, CliCommandParser.parse("/plugin list").type());
+        assertNull(CliCommandParser.parse("/plugin list").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_ENABLE, CliCommandParser.parse("/plugin enable my-plugin").type());
+        assertEquals("my-plugin", CliCommandParser.parse("/plugin enable my-plugin").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_DISABLE, CliCommandParser.parse("/plugin disable my-plugin").type());
+        assertEquals("my-plugin", CliCommandParser.parse("/plugin disable my-plugin").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_RELOAD, CliCommandParser.parse("/plugin reload").type());
+        assertNull(CliCommandParser.parse("/plugin reload").payload());
+    }
 }

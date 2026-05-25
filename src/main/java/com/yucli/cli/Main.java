@@ -18,8 +18,13 @@ import com.yucli.policy.AuditLog;
 import com.yucli.rag.CodeRetriever;
 import com.yucli.rag.CodeRelation;
 import com.yucli.rag.SearchResultFormatter;
+import com.yucli.plugin.PluginInfo;
+import com.yucli.plugin.PluginManager;
+import com.yucli.plugin.PluginState;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.runtime.CancellationToken;
+import com.yucli.session.Session;
+import com.yucli.session.SessionManager;
 import com.yucli.tui.TuiApplication;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
@@ -54,7 +59,7 @@ import java.util.concurrent.TimeUnit;
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.yucli.policy
  */
 public class Main {
-    private static final String VERSION = "16.0.0";
+    private static final String VERSION = "19.0.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";
@@ -132,6 +137,7 @@ public class Main {
             TerminalHitlHandler hitlHandler = new TerminalHitlHandler(false);
             HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(hitlHandler);
             McpServerManager mcpServerManager = new McpServerManager(hitlToolRegistry, Path.of("."));
+            mcpServerManager.setLlmClient(llmClient);
             try {
                 mcpServerManager.loadConfiguredServers();
                 mcpServerManager.startAll();
@@ -139,8 +145,11 @@ public class Main {
                 System.out.println(mcpServerManager.startupSummary());
                 System.out.println();
             } catch (Exception e) {
-                System.out.println("⚠️ MCP 初始化失败: " + e.getMessage());
-                System.out.println("   可检查 ~/.YuCLI/mcp.json 或 .YuCLI/mcp.json\n");
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                System.out.println("⚠️ MCP 初始化失败: " + root.getClass().getSimpleName() + ": " + root.getMessage());
+                System.out.println("   可检查 ~/.YuCLI/mcp.json 或 .YuCLI/mcp.json");
+                e.printStackTrace(System.err);
             }
             LineReader lineReader = LineReaderBuilder.builder()
                     .terminal(terminal)
@@ -152,12 +161,34 @@ public class Main {
             Agent reactAgent = new Agent(llmClient, hitlToolRegistry);
             reactAgent.setMcpServerManager(mcpServerManager);
 
+            PluginManager pluginManager = new PluginManager(hitlToolRegistry);
+            try {
+                pluginManager.loadAll();
+                int pluginCount = pluginManager.listPlugins().size();
+                if (pluginCount > 0) {
+                    System.out.println("🔌 已加载 " + pluginCount + " 个插件\n");
+                }
+            } catch (Exception e) {
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                System.out.println("⚠️ 插件系统初始化失败: " + root.getClass().getSimpleName() + ": " + root.getMessage() + "\n");
+            }
+
             com.yucli.skill.SkillRegistry skillRegistry = new com.yucli.skill.SkillRegistry();
             Path userSkillsDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
             if (Files.isDirectory(userSkillsDir)) {
                 skillRegistry.loadUserSkills(userSkillsDir);
             }
             reactAgent.setSkillRegistry(skillRegistry);
+
+            SessionManager sessionManager = new SessionManager(reactAgent.getMemoryManager());
+            Runtime.getRuntime().addShutdownHook(new Thread(sessionManager::saveOnExit, "YuCLI-session-shutdown"));
+
+            Session unclosedSession = sessionManager.findMostRecentUnclosed();
+            if (unclosedSession != null) {
+                System.out.println("💡 发现未关闭的会话 " + unclosedSession.getShortId() + "，输入 /resume 恢复");
+            }
+
             System.out.println("🔄 使用 ReAct 模式\n");
             boolean nextTaskUsePlanMode = false;
             boolean nextTaskUseTeamMode = false;
@@ -196,7 +227,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /tui /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
                         continue;
                     }
                     case TUI_LAUNCH -> {
@@ -263,6 +294,172 @@ public class Main {
                         }
                         System.out.println("🔄 Skill 已重新加载\n");
                         System.out.println(reactAgent.getSkillRegistry().getStatusText());
+                        System.out.println();
+                        continue;
+                    }
+                    case PLUGIN_LIST -> {
+                        java.util.List<PluginInfo> pluginList = pluginManager.listPlugins();
+                        if (pluginList.isEmpty()) {
+                            System.out.println("📭 当前没有已加载的插件");
+                            System.out.println("   将 .jar 文件放入 ~/.YuCLI/plugins/ 目录后执行 /plugin reload\n");
+                        } else {
+                            System.out.println("🔌 插件列表 (" + pluginList.size() + " 个):");
+                            for (PluginInfo info : pluginList) {
+                                String stateIcon = switch (info.state()) {
+                                    case ENABLED -> "✅";
+                                    case DISABLED -> "❌";
+                                    case ERROR -> "⚠️";
+                                    case LOADED -> "⏳";
+                                };
+                                System.out.printf("   %s %s v%s [%s]%n",
+                                        stateIcon, info.instance().name(),
+                                        info.instance().version(), info.state());
+                                System.out.println("      " + info.instance().description());
+                            }
+                            System.out.println();
+                        }
+                        continue;
+                    }
+                    case PLUGIN_ENABLE -> {
+                        String pluginName = command.payload();
+                        if (pluginName == null || pluginName.isEmpty()) {
+                            System.out.println("❌ 请提供插件名称，例如 /plugin enable my-plugin\n");
+                        } else {
+                            try {
+                                pluginManager.enablePlugin(pluginName);
+                                System.out.println("✅ 插件 '" + pluginName + "' 已启用\n");
+                            } catch (Exception e) {
+                                System.out.println("❌ 启用插件失败: " + e.getMessage() + "\n");
+                            }
+                        }
+                        continue;
+                    }
+                    case PLUGIN_DISABLE -> {
+                        String pluginName = command.payload();
+                        if (pluginName == null || pluginName.isEmpty()) {
+                            System.out.println("❌ 请提供插件名称，例如 /plugin disable my-plugin\n");
+                        } else {
+                            try {
+                                pluginManager.disablePlugin(pluginName);
+                                System.out.println("❌ 插件 '" + pluginName + "' 已禁用\n");
+                            } catch (Exception e) {
+                                System.out.println("❌ 禁用插件失败: " + e.getMessage() + "\n");
+                            }
+                        }
+                        continue;
+                    }
+                    case PLUGIN_RELOAD -> {
+                        pluginManager.reloadAll();
+                        System.out.println("🔄 插件已重新加载");
+                        java.util.List<PluginInfo> reloadedPlugins = pluginManager.listPlugins();
+                        if (reloadedPlugins.isEmpty()) {
+                            System.out.println("   没有找到插件，将 .jar 文件放入 ~/.YuCLI/plugins/ 目录\n");
+                        } else {
+                            System.out.println("   已加载 " + reloadedPlugins.size() + " 个插件\n");
+                        }
+                        continue;
+                    }
+                    case SESSION_LIST -> {
+                        java.util.List<Session> sessions = sessionManager.listSessions();
+                        if (sessions.isEmpty()) {
+                            System.out.println("📭 没有已保存的会话\n");
+                        } else {
+                            System.out.println("📋 会话列表 (" + sessions.size() + " 个):");
+                            for (Session s : sessions) {
+                                String summary = s.getTaskSummary() != null ? s.getTaskSummary() : "(无摘要)";
+                                if (summary.length() > 40) summary = summary.substring(0, 40) + "...";
+                                System.out.printf("   %s  %s  %d msgs  %s%n",
+                                        s.getShortId(),
+                                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(s.getUpdatedAt())),
+                                        s.getMessages().size(),
+                                        summary);
+                            }
+                            System.out.println();
+                        }
+                        continue;
+                    }
+                    case SESSION_SAVE -> {
+                        String saveName = command.payload();
+                        Session session = sessionManager.getCurrentSession();
+                        if (session == null) {
+                            session = sessionManager.createSession();
+                        }
+                        if (saveName != null && !saveName.isEmpty()) {
+                            session.setTaskSummary(saveName);
+                        }
+                        session.setModelName(llmClient.getModelName());
+                        session.setProvider(llmClient.getProviderName());
+                        sessionManager.autoSave();
+                        System.out.println("💾 会话已保存: " + session.getShortId() + "\n");
+                        continue;
+                    }
+                    case SESSION_LOAD -> {
+                        String loadId = command.payload();
+                        if (loadId == null || loadId.isEmpty()) {
+                            System.out.println("❌ 请提供会话 ID，例如 /session load abc12345\n");
+                            continue;
+                        }
+                        Session loaded = sessionManager.findSessionByPartialId(loadId);
+                        if (loaded == null) {
+                            loaded = sessionManager.loadSession(loadId);
+                        }
+                        if (loaded == null) {
+                            System.out.println("❌ 未找到会话: " + loadId + "\n");
+                            continue;
+                        }
+                        sessionManager.setCurrentSession(loaded);
+                        reactAgent.getMemoryManager().loadFromSession(loaded);
+                        System.out.println("📂 已加载会话: " + loaded.getShortId() +
+                                " (" + loaded.getMessages().size() + " 条消息)\n");
+                        continue;
+                    }
+                    case SESSION_DELETE -> {
+                        String deleteId = command.payload();
+                        if (deleteId == null || deleteId.isEmpty()) {
+                            System.out.println("❌ 请提供会话 ID，例如 /session delete abc12345\n");
+                            continue;
+                        }
+                        Session toDelete = sessionManager.findSessionByPartialId(deleteId);
+                        if (toDelete != null) deleteId = toDelete.getSessionId();
+                        if (sessionManager.deleteSession(deleteId)) {
+                            System.out.println("🗑️ 已删除会话: " + deleteId + "\n");
+                        } else {
+                            System.out.println("❌ 未找到会话: " + deleteId + "\n");
+                        }
+                        continue;
+                    }
+                    case SESSION_EXPORT -> {
+                        String exportPayload = command.payload();
+                        if (exportPayload == null || exportPayload.isEmpty()) {
+                            System.out.println("❌ 用法: /session export <id> [path]\n");
+                            continue;
+                        }
+                        String[] parts = exportPayload.split("\\s+", 2);
+                        String exportId = parts[0];
+                        String exportPath = parts.length > 1 ? parts[1] : ".";
+                        Session exportSession = sessionManager.findSessionByPartialId(exportId);
+                        if (exportSession != null) exportId = exportSession.getSessionId();
+                        try {
+                            sessionManager.exportSession(exportId, exportPath);
+                            System.out.println("📤 会话已导出: " + exportId + " -> " + exportPath + "\n");
+                        } catch (Exception e) {
+                            System.out.println("❌ 导出失败: " + e.getMessage() + "\n");
+                        }
+                        continue;
+                    }
+                    case RESUME -> {
+                        Session recent = sessionManager.findMostRecentUnclosed();
+                        if (recent == null) {
+                            System.out.println("📭 没有可恢复的会话\n");
+                            continue;
+                        }
+                        sessionManager.setCurrentSession(recent);
+                        reactAgent.getMemoryManager().loadFromSession(recent);
+                        System.out.println("🔄 已恢复会话: " + recent.getShortId() +
+                                " (" + recent.getMessages().size() + " 条消息)");
+                        if (recent.getTaskSummary() != null) {
+                            System.out.println("   摘要: " + recent.getTaskSummary());
+                        }
                         System.out.println();
                         continue;
                     }
@@ -380,6 +577,18 @@ public class Main {
                     }
                     case MCP_PROMPTS -> {
                         printMcpCommandResult(mcpServerManager.prompts(command.payload()));
+                        continue;
+                    }
+                    case MCP_AUTH -> {
+                        printMcpCommandResult(mcpServerManager.authServer(command.payload()));
+                        continue;
+                    }
+                    case MCP_AUTH_STATUS -> {
+                        printMcpCommandResult(mcpServerManager.authStatus());
+                        continue;
+                    }
+                    case MCP_AUTH_REVOKE -> {
+                        printMcpCommandResult(mcpServerManager.authRevoke(command.payload()));
                         continue;
                     }
                     case INDEX_CODE -> {
@@ -566,7 +775,8 @@ public class Main {
             if (terminal != null && original != null) {
                 try {
                     terminal.setAttributes(original);
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    System.err.println("Warning: failed to restore terminal attributes: " + e.getMessage());
                 }
             }
             CancellationContext.clear(token);
@@ -603,7 +813,7 @@ public class Main {
                 }
             }
             return decideEscCancel(next, escTail);
-        } catch (Exception ignored) {
+        } catch (IOException | InterruptedException ignored) {
             // 监听是 best-effort；失败不能影响任务执行。
             return false;
         }
@@ -750,7 +960,7 @@ public class Main {
             } finally {
                 terminal.setAttributes(originalAttributes);
             }
-        } catch (Exception e) {
+        } catch (IOException | InterruptedException e) {
             return KeyReadResult.unavailable();
         }
     }
@@ -783,7 +993,7 @@ public class Main {
             } finally {
                 terminal.setAttributes(originalAttributes);
             }
-        } catch (Exception e) {
+        } catch (IOException | InterruptedException e) {
             return null;
         }
     }
@@ -856,11 +1066,13 @@ public class Main {
                 "输入 '/hitl off' 关闭 HITL 审批",
                 "输入 '/mcp' 查看 MCP server，'/mcp restart|logs|disable|enable <name>' 管理 MCP",
                 "输入 '/mcp resources <name>' 查看 MCP resources，'/mcp prompts <name>' 查看 prompts",
+                "输入 '/mcp auth <server>' 发起 OAuth 认证，'/mcp auth status' 查看认证状态，'/mcp auth revoke <server>' 撤销令牌",
                 "在普通任务里输入 '@server:protocol://path' 可显式引用 MCP resource",
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
+                "输入 '/plugin' 查看插件，'/plugin enable|disable <name>' 启用/禁用插件，'/plugin reload' 重新加载",
                 "输入 '/tui' 启动终端图形界面模式（TUI）",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
@@ -871,6 +1083,8 @@ public class Main {
                 "输入 '/memory' 查看记忆状态",
                 "输入 '/memory clear' 清空长期记忆",
                 "输入 '/save 事实内容' 手动保存关键事实",
+                "输入 '/session' 查看会话列表，'/session save' 保存当前会话，'/session load|delete|export <id>' 加载/删除/导出会话",
+                "输入 '/resume' 恢复上次未完成的会话",
                 "输入 '/exit' 或 '/quit' 退出"
         );
     }
@@ -1106,18 +1320,10 @@ public class Main {
     }
 
     private static void printBanner() {
-        System.out.println("╔══════════════════════════════════════════════════════════╗");
-        System.out.println("║                                                          ║");
-        System.out.println("║   ██████╗  █████╗ ██╗ ██████╗██╗     ██╗                ║");
-        System.out.println("║   ██╔══██╗██╔══██╗██║██╔════╝██║     ██║                ║");
-        System.out.println("║   ██████╔╝███████║██║██║     ██║     ██║                ║");
-        System.out.println("║   ██╔═══╝ ██╔══██║██║██║     ██║     ██║                ║");
-        System.out.println("║   ██║     ██║  ██║██║╚██████╗███████╗██║                ║");
-        System.out.println("║   ╚═╝     ╚═╝  ╚═╝╚═╝ ╚═════╝╚══════╝╚═╝                ║");
-        System.out.println("║                                                          ║");
-        System.out.printf("║      MCP-Native Agent CLI %-29s║%n", "v" + VERSION);
-        System.out.println("║                                                          ║");
-        System.out.println("╚══════════════════════════════════════════════════════════╝");
+        System.out.println("+----------------------------------------------------------+");
+        System.out.println("| YuCLI                                                    |");
+        System.out.printf("| MCP-Native Agent CLI %-35s|%n", "v" + VERSION);
+        System.out.println("+----------------------------------------------------------+");
         System.out.println();
     }
 }

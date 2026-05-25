@@ -22,11 +22,9 @@ class ToolRegistryTest {
             ToolRegistry registry = new ToolRegistry();
             registry.setProjectPath(tempDir.toString());
 
-            // execute_command 在内部用 bash -c 执行，pwd 在 bash 中可用
-            String result = registry.executeTool("execute_command", "{\"command\":\"pwd\"}");
+            String command = isWindows() ? "cd" : "pwd";
+            String result = registry.executeTool("execute_command", "{\"command\":\"" + command + "\"}");
 
-            // bash 在 Windows 上可能输出 /c/Users/... 或 /mnt/c/Users/...
-            // 所以检查项目路径的最后一级目录名即可
             assertTrue(result.contains(tempDir.getFileName().toString()),
                     "命令输出应包含目录名: " + result);
         } finally {
@@ -52,8 +50,8 @@ class ToolRegistryTest {
             ToolRegistry registry = new ToolRegistry(1);
             registry.setProjectPath(tempDir.toString());
 
-            // execute_command 内部用 bash -c 执行，sleep 在 bash 中通用
-            String result = registry.executeTool("execute_command", "{\"command\":\"sleep 2\"}");
+            String command = isWindows() ? "ping -n 3 127.0.0.1 > nul" : "sleep 2";
+            String result = registry.executeTool("execute_command", "{\"command\":\"" + command + "\"}");
 
             assertTrue(result.contains("命令执行超时"), "预期超时，实际输出: " + result);
         } finally {
@@ -96,6 +94,20 @@ class ToolRegistryTest {
     }
 
     @Test
+    void shouldUseNativeShellForCurrentOperatingSystem() {
+        List<String> commandLine = ToolRegistry.shellCommand("echo ok");
+
+        if (isWindows()) {
+            assertEquals("cmd.exe", commandLine.get(0));
+            assertEquals("/c", commandLine.get(1));
+        } else {
+            assertEquals("bash", commandLine.get(0));
+            assertEquals("-c", commandLine.get(1));
+        }
+        assertEquals("echo ok", commandLine.get(2));
+    }
+
+    @Test
     void shouldCancelToolInvocationWhenBatchTimeoutIsReached() {
         ToolRegistry registry = new ToolRegistry(1, 1) {
             @Override
@@ -119,5 +131,9 @@ class ToolRegistryTest {
         assertTrue(results.get(0).timedOut());
         assertTrue(results.get(0).result().contains("工具执行超时"));
         assertEquals("result-fast", results.get(1).result());
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase().contains("win");
     }
 }

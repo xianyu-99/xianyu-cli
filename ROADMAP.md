@@ -1,4 +1,4 @@
-﻿# YuCLI 迭代路线图（16 期）
+﻿# YuCLI 迭代路线图（19 期）
 
 从零开始，逐步构建生产级 Java Agent CLI
 
@@ -422,6 +422,131 @@
 
 ---
 
+## 第17期：OAuth 2.0 认证 + MCP Server 安全访问 ✅
+
+**已完成**
+
+**前置依赖**：第10期 MCP核心、第11期 MCP高级
+
+**目标**：让 YuCLI 能连接需要 OAuth 2.0 认证的远程 MCP Server（如 GitHub MCP Server、企业内部 MCP Server），打通 MCP 生态中最关键的认证缺口。
+
+**功能迭代**：
+- `McpOAuthClient`：PKCE code_verifier/code_challenge 生成、授权 URL 构建、回调监听、token 交换
+- `OAuthCallbackServer`：轻量 HttpServer 监听回调，带超时和 CSRF state 校验
+- `TokenStore`：持久化到 `~/.YuCLI/mcp-tokens.json`，按 server name 索引
+- `TokenProvider` 接口：`StreamableHttpTransport` 自动注入 `Authorization: Bearer` header，401 自动 refresh 重试
+- 配置扩展：`McpServerConfig` 新增 `oauth`、`clientId`、`scopes`、`authorizationEndpoint`、`tokenEndpoint` 字段
+- CLI 命令：`/mcp auth <server>`、`/mcp auth status`、`/mcp auth revoke <server>`
+- HITL 集成：首次 OAuth 授权需用户确认
+- AuditLog：记录 auth / refresh / revoke 事件
+
+**核心知识点**：
+- OAuth 2.0 Authorization Code + PKCE（RFC 7636）
+- 本地回调 server 实现
+- Token 生命周期管理
+- HTTP 401 自动重试与 token 注入拦截器模式
+
+**教程标题候选**：《远程 MCP Server 要登录？手写 OAuth 2.0 + PKCE，一行命令完成授权》
+
+---
+
+## 第18期：插件系统 + 自定义工具扩展 ✅
+
+**已完成**
+
+**前置依赖**：第15期 Skill系统
+
+**目标**：让用户通过编写 Java 类、打成 JAR 放入 `~/.YuCLI/plugins/` 即可扩展 YuCLI 的工具和能力，无需修改主程序代码。
+
+**功能迭代**：
+- `YuPlugin` 接口：`name()`、`description()`、`version()`、`onLoad(PluginContext)`、`onEnable()`、`onDisable()`、`onUnload()`
+- `PluginContext`：受限 API 表面，`registerTool()`、`registerSearchProvider()`、`getConfigDir()`
+- `PluginManager`：扫描 `~/.YuCLI/plugins/*.jar`，`URLClassLoader` + `ServiceLoader<YuPlugin>` 发现与加载
+- `ToolRegistry` 集成：`registerPluginTool()` 方法，`plugin__` 命名空间隔离
+- 插件工具走 HITL 审批（`ApprovalPolicy.isPluginTool()`）
+- 插件状态持久化到 `~/.YuCLI/plugins.json`
+- CLI 命令：`/plugin list`、`/plugin enable <name>`、`/plugin disable <name>`、`/plugin reload`
+
+**核心知识点**：
+- Java `URLClassLoader` 动态加载与类隔离
+- `ServiceLoader` SPI 服务发现机制
+- 插件生命周期设计
+- 受限 API 表面（Context 模式）
+
+**教程标题候选**：《给 AI Agent 装插件——用 URLClassLoader + SPI 打造 Java 插件系统》
+
+---
+
+## 第19期：会话持久化 + 跨重启恢复 ✅
+
+**已完成**
+
+**前置依赖**：第3期 Memory系统
+
+**目标**：让 YuCLI 的对话历史能跨进程重启恢复，支持多会话切换、导出和自动保存。
+
+**功能迭代**：
+- `Session` 数据模型：sessionId、createdAt、updatedAt、modelName、provider、taskSummary、totalTokens、messages
+- `SessionMessage`：role、content、timestamp、tokenCount、toolName、toolResult
+- `SessionSerializer`：基于 Jackson 的 JSON 序列化，存储到 `~/.YuCLI/sessions/{sessionId}.json`
+- `SessionManager`：会话 CRUD、自动保存调度（定时 + shutdown hook）、`findMostRecentUnclosed`、`findSessionByPartialId`
+- `MemoryManager` 扩展：`exportToSession()` 和 `loadFromSession(Session)` 方法
+- 启动时检测未关闭会话，提示 `/resume` 恢复
+- CLI 命令：`/session list`、`/session save [name]`、`/session load <id>`、`/session delete <id>`、`/session export <id> [path]`、`/resume`
+
+**核心知识点**：
+- 会话状态的序列化边界
+- Jackson 泛型序列化与 `TypeReference`
+- JVM shutdown hook 与优雅退出
+- 会话与长期记忆的互补关系
+
+**教程标题候选**：《对话不再丢失——给 AI Agent 加上会话持久化与跨重启恢复》
+
+---
+
+## MCP 后续增强 ✅
+
+**已完成**
+
+在第 10-11 期 MCP 基础上补齐的四项协议级能力：
+
+### sampling/createMessage
+
+MCP server 可反向请求客户端 LLM 生成文本（server → client 调 LLM）。
+
+- `JsonRpcClient` 新增 `onRequest()` 机制：支持服务端发起的 JSON-RPC 请求
+- `McpClient.onSamplingHandler()` 注册 `sampling/createMessage` 处理器
+- `McpInitializeRequest` 声明 `sampling` capability
+- `McpServerManager` 在启动时自动注册 sampling handler，路由到本地 LLM
+- `McpServerManager.setLlmClient()` 注入 LLM 客户端
+
+### Server 自动重启
+
+stdio server 异常退出时自动重启，带退避策略。
+
+- `StdioTransport` 新增 `onExit(Runnable)` 回调和 `isAlive()` 检测
+- `McpServerManager` 在 stdio server 启动成功后注册 onExit 回调
+- 退避策略：1s → 5s → 15s，最多 3 次自动重启
+- 手动 `/mcp restart` 重置重启计数
+- 超过上限后标记为 ERROR 并提示用户
+
+### Prompts 注入
+
+MCP server 暴露的 prompt 模板自动注入 system prompt。
+
+- `McpServerManager.allPrompts()` 收集所有 READY server 的 prompts
+- `Agent.buildSystemPrompt()` 在长上下文模式下注入 MCP prompts 索引
+- LLM 可感知可用 prompt 模板，按需决定是否使用
+
+### Resources 自动注入（已有，增强说明）
+
+长上下文模式下，所有 MCP resource URI + 描述自动注入 system prompt。
+
+- 已在第 12 期实现，`Agent.buildSystemPrompt()` 中 `resourcesIndex` 变量
+- 仅在 ContextMode.LONG 时注入，短模式按需 list 即可
+
+---
+
 ## 技术栈演进图
 
 ```
@@ -432,13 +557,17 @@ ReAct    执行     上下文    检索       协作      协同      并行    
 第9期 ──► 第10期 ──► 第11期 ──► 第12期 ──► 第13期 ──► 第14期 ──► 第15期 ──► 第16期
 联网     MCP核心    MCP高级     长上下文    Chrome     CDP        Skill      TUI
 能力     stdio+HTTP rsc/sample  200k-1M    DevTools   会话复用    系统       产品化
+
+第17期 ──► 第18期 ──► 第19期
+OAuth      插件       会话
+认证       系统       持久化
 ```
 
 ## 学习路径建议
 
 **入门**：按顺序 1 → 2 → 3 → 6 → 16，掌握核心即可
 **进阶**：1 → 2 → 3 → 4 → 7 → 8 → 9 → 10 → 12 → 15，深入技术细节
-**全套**：全部 16 期
+**全套**：全部 19 期 + MCP 后续增强
 
 ## 参考项目
 
@@ -452,9 +581,9 @@ ReAct    执行     上下文    检索       协作      协同      并行    
 
 ## Pro 升级版本（独立分支）
 
-主线 16 期完成后，将开启独立分支做框架重构，作为「手写版 → 框架版」的对照实现。不并入主分支，主线手写版保持稳定基线。
+主线 19 期完成后，将开启独立分支做框架重构，作为「手写版 → 框架版」的对照实现。不并入主分支，主线手写版保持稳定基线。
 
-**触发时机**：主线 1–16 期全部交付后启动
+**触发时机**：主线 1–19 期 + MCP 后续增强全部交付后启动
 
 **候选实现**：
 
@@ -465,4 +594,4 @@ ReAct    执行     上下文    检索       协作      协同      并行    
 
 ---
 
-*已完成第 11 期 MCP 高级能力首批交付（resources 双轨、prompts 查看、被动通知、运行中取消）。下一步进入第 12 期长上下文工程，OAuth / sampling / recovery 留给后续 MCP 增强期。*
+*已完成第 19 期会话持久化 + MCP 后续增强（sampling、自动重启、prompts 注入、resources 注入）。*

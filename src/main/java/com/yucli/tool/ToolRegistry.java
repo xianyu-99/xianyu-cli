@@ -48,9 +48,11 @@ public class ToolRegistry {
     // browser_navigate / browser_click / browser_type 有副作用，纳入审计。
     private static final Set<String> AUDIT_TOOLS = Set.of(
             "write_file", "execute_command", "create_project",
-            "browser_navigate", "browser_click", "browser_type");
+            "browser_navigate", "browser_click", "browser_type",
+            "browser_evaluate", "browser_tab", "browser_close");
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
     private final Map<String, McpRegisteredTool> mcpTools = new ConcurrentHashMap<>();
+    private final Map<String, PluginRegisteredTool> pluginTools = new ConcurrentHashMap<>();
     private final long commandTimeoutSeconds;
     private final long toolBatchTimeoutSeconds;
     private static final int DEFAULT_FETCH_MAX_CHARS = 8_000;
@@ -481,7 +483,7 @@ public class ToolRegistry {
         }
 
         try {
-            WebFetcher.RawResponse raw = webFetcher().fetch(url.trim());
+            WebFetcher.RawResponse raw = webFetcher().fetch(url.trim(), policy);
             HtmlExtractor.Extracted extracted = htmlExtractor().extract(raw.body(), raw.url());
             String markdown = extracted.markdown();
 
@@ -587,6 +589,19 @@ public class ToolRegistry {
         tools.remove(toolName);
     }
 
+    public synchronized void unregisterPluginTools(String prefix) {
+        if (prefix == null || prefix.isBlank()) {
+            return;
+        }
+        List<String> toRemove = pluginTools.keySet().stream()
+                .filter(name -> name.startsWith(prefix))
+                .toList();
+        for (String toolName : toRemove) {
+            pluginTools.remove(toolName);
+            tools.remove(toolName);
+        }
+    }
+
     public synchronized void replaceMcpToolsForServer(String serverName, List<McpToolDescriptor> newTools,
                                                       Function<McpToolDescriptor, Function<String, String>> invokerFactory) {
         Objects.requireNonNull(serverName, "serverName");
@@ -603,6 +618,27 @@ public class ToolRegistry {
         for (McpToolDescriptor descriptor : newTools) {
             registerMcpTool(descriptor, invokerFactory.apply(descriptor));
         }
+    }
+
+    public void setSearchProvider(SearchProvider provider) {
+        this.searchProvider = provider;
+    }
+
+    public synchronized void registerPluginTool(String pluginName, String toolName, String description, JsonNode parameters,
+                                                com.yucli.plugin.ToolExecutor executor) {
+        Objects.requireNonNull(pluginName, "pluginName");
+        Objects.requireNonNull(toolName, "toolName");
+        Objects.requireNonNull(executor, "executor");
+        String pluginToolName = "plugin__" + pluginName + "__" + toolName;
+        String pluginDesc = description == null ? "插件提供的工具" : description + " (plugin: " + pluginName + ")";
+        PluginRegisteredTool registered = new PluginRegisteredTool(pluginToolName, description, executor);
+        pluginTools.put(pluginToolName, registered);
+        tools.put(pluginToolName, new Tool(
+                pluginToolName,
+                pluginDesc,
+                parameters,
+                args -> "插件工具不应通过 Map<String,String> 入口执行"
+        ));
     }
 
     /**
@@ -629,6 +665,16 @@ public class ToolRegistry {
             McpRegisteredTool mcpTool = mcpTools.get(name);
             if (mcpTool != null) {
                 String result = mcpTool.invoker().apply(argumentsJson);
+                if (shouldAudit) {
+                    auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
+                }
+                return result;
+            }
+
+            PluginRegisteredTool pluginTool = pluginTools.get(name);
+            if (pluginTool != null) {
+                JsonNode argsNode = mapper.readTree(argumentsJson);
+                String result = pluginTool.executor().execute(argsNode);
                 if (shouldAudit) {
                     auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
                 }
@@ -749,7 +795,8 @@ public class ToolRegistry {
     }
 
     private static boolean shouldAudit(String name) {
-        return AUDIT_TOOLS.contains(name) || (name != null && name.startsWith("mcp__"));
+        return AUDIT_TOOLS.contains(name) || (name != null && name.startsWith("mcp__"))
+                || (name != null && name.startsWith("plugin__"));
     }
 
     private static String mcpDescription(McpToolDescriptor descriptor) {
@@ -779,7 +826,7 @@ public class ToolRegistry {
 
         Process process = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder("bash", "-c", normalized);
+            ProcessBuilder pb = new ProcessBuilder(shellCommand(normalized));
             pb.directory(new File(projectPath));
             pb.redirectErrorStream(true);
             process = pb.start();
@@ -812,6 +859,14 @@ public class ToolRegistry {
         } finally {
             outputReaderExecutor.shutdownNow();
         }
+    }
+
+    static List<String> shellCommand(String normalizedCommand) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("win")) {
+            return List.of("cmd.exe", "/c", normalizedCommand);
+        }
+        return List.of("bash", "-c", normalizedCommand);
     }
 
     private String readProcessOutput(Process process) throws Exception {
@@ -864,6 +919,8 @@ public class ToolRegistry {
     public record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
 
     private record McpRegisteredTool(McpToolDescriptor descriptor, Function<String, String> invoker) {}
+
+    private record PluginRegisteredTool(String name, String description, com.yucli.plugin.ToolExecutor executor) {}
 
     public record ToolInvocation(String id, String name, String argumentsJson) {}
 
