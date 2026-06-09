@@ -1,6 +1,13 @@
 package com.yucli.mcp.auth;
 
+import com.yucli.mcp.config.McpServerConfig;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -52,5 +59,36 @@ class McpOAuthClientTest {
         String verifier = McpOAuthClient.generateCodeVerifier();
         String challenge = McpOAuthClient.generateCodeChallenge(verifier);
         assertNotEquals(verifier, challenge, "challenge 不应等于 verifier");
+    }
+
+    @Test
+    void refreshTokenPreservesExistingRefreshTokenWhenResponseOmitsIt(@TempDir Path tempDir) throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(new MockResponse()
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"access_token\":\"new-access\",\"expires_in\":3600}"));
+
+            McpServerConfig config = new McpServerConfig();
+            config.setClientId("client-id");
+            config.setTokenEndpoint(server.url("/token").toString());
+
+            TokenStore store = new TokenStore(tempDir.toFile());
+            store.saveToken("demo", new TokenStore.TokenEntry("old-access", "old-refresh", 1));
+
+            McpOAuthClient client = new McpOAuthClient("demo", config, store);
+            client.refreshToken();
+
+            RecordedRequest request = server.takeRequest();
+            assertEquals("/token", request.getPath());
+            assertTrue(request.getBody().readUtf8().contains("refresh_token=old-refresh"));
+
+            TokenStore.TokenEntry saved = store.getToken("demo");
+            assertEquals("new-access", saved.accessToken());
+            assertEquals("old-refresh", saved.refreshToken());
+        } finally {
+            server.shutdown();
+        }
     }
 }

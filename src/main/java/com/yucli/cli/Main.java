@@ -402,7 +402,7 @@ public class Main {
                             continue;
                         }
                         sessionManager.setCurrentSession(loaded);
-                        reactAgent.getMemoryManager().loadFromSession(loaded);
+                        reactAgent.restoreSession(loaded);
                         System.out.println("📂 已加载会话: " + loaded.getShortId() +
                                 " (" + loaded.getMessages().size() + " 条消息)\n");
                         continue;
@@ -448,7 +448,7 @@ public class Main {
                             continue;
                         }
                         sessionManager.setCurrentSession(recent);
-                        reactAgent.getMemoryManager().loadFromSession(recent);
+                        reactAgent.restoreSession(recent);
                         System.out.println("🔄 已恢复会话: " + recent.getShortId() +
                                 " (" + recent.getMessages().size() + " 条消息)");
                         if (recent.getTaskSummary() != null) {

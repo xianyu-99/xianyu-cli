@@ -101,10 +101,18 @@ public class SessionManager {
             return null;
         }
         List<Session> sessions = serializer.listAll();
-        return sessions.stream()
-                .filter(s -> s.getSessionId() != null && s.getSessionId().startsWith(partialId))
+        Session exactMatch = sessions.stream()
+                .filter(s -> partialId.equals(s.getSessionId()))
                 .findFirst()
                 .orElse(null);
+        if (exactMatch != null) {
+            return exactMatch;
+        }
+
+        List<Session> prefixMatches = sessions.stream()
+                .filter(s -> s.getSessionId() != null && s.getSessionId().startsWith(partialId))
+                .toList();
+        return prefixMatches.size() == 1 ? prefixMatches.get(0) : null;
     }
 
     public Session getCurrentSession() {

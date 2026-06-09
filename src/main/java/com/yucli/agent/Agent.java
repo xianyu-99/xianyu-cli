@@ -3,6 +3,8 @@ package com.yucli.agent;
 import com.yucli.llm.LlmClient;
 import com.yucli.memory.MemoryManager;
 import com.yucli.runtime.CancellationContext;
+import com.yucli.session.Session;
+import com.yucli.session.SessionMessage;
 import com.yucli.util.AnsiStyle;
 import com.yucli.tool.ToolRegistry;
 import com.yucli.tool.ToolRegistry.ToolExecutionResult;
@@ -319,6 +321,32 @@ public class Agent {
 
         // 清空短期记忆
         memoryManager.clearShortTerm();
+    }
+
+    public void restoreSession(Session session) {
+        if (session == null) {
+            memoryManager.clearShortTerm();
+        } else {
+            memoryManager.loadFromSession(session);
+        }
+        conversationHistory.clear();
+        conversationHistory.add(LlmClient.Message.system(buildSystemPrompt(memoryManager.getContextMode())));
+        if (session == null || session.getMessages() == null) {
+            return;
+        }
+
+        for (SessionMessage message : session.getMessages()) {
+            if (message == null || message.getContent() == null) {
+                continue;
+            }
+            switch (message.getRole()) {
+                case "user" -> conversationHistory.add(LlmClient.Message.user(message.getContent()));
+                case "assistant" -> conversationHistory.add(LlmClient.Message.assistant(message.getContent()));
+                default -> {
+                    // Stored tool messages lack tool_call_id, so replaying them would violate the LLM message protocol.
+                }
+            }
+        }
     }
 
     /**

@@ -186,6 +186,21 @@ class SessionManagerTest {
         assertEquals(session.getSessionId(), found.getSessionId());
     }
 
+    @Test
+    void findSessionByPartialIdDoesNotChooseAmbiguousPrefix() {
+        Session first = new Session("abc11111-1111-1111-1111-111111111111", 1000L);
+        first.setTaskSummary("first");
+        first.setUpdatedAt(1000L);
+        sessionManager.saveSession(first);
+
+        Session second = new Session("abc22222-2222-2222-2222-222222222222", 2000L);
+        second.setTaskSummary("second");
+        second.setUpdatedAt(2000L);
+        sessionManager.saveSession(second);
+
+        assertNull(sessionManager.findSessionByPartialId("abc"));
+    }
+
     private static final class StubLlmClient extends com.yucli.llm.GLMClient {
         StubLlmClient() {
             super("test-key");

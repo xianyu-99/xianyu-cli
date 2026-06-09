@@ -59,6 +59,13 @@ public class McpOAuthClient implements TokenProvider {
         }
         try {
             TokenStore.TokenEntry refreshed = refreshAccessToken(entry.refreshToken());
+            if (refreshed.refreshToken() == null || refreshed.refreshToken().isBlank()) {
+                refreshed = new TokenStore.TokenEntry(
+                        refreshed.accessToken(),
+                        entry.refreshToken(),
+                        refreshed.expiresAtEpochSeconds()
+                );
+            }
             cachedToken[0] = refreshed;
             tokenStore.saveToken(serverName, refreshed);
         } catch (IOException e) {
