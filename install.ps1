@@ -45,7 +45,7 @@ Copy-Item $JAR_PATH "$INSTALL_DIR\$JAR_NAME" -Force
 
 # 4. Create wrapper cmd
 $cmdContent = "@echo off`r`njava -jar `"$INSTALL_DIR\$JAR_NAME`" %*"
-Set-Content -Path "$INSTALL_DIR\$SCRIPT_NAME" -Value $cmdContent
+Set-Content -Path "$INSTALL_DIR\$SCRIPT_NAME" -Value $cmdContent -Encoding OEM
 
 # 5. Add to PATH if needed
 $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")

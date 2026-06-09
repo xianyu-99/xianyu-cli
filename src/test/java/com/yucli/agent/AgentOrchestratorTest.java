@@ -7,6 +7,8 @@ import com.yucli.llm.GLMClient;
 import com.yucli.llm.LlmClient;
 import com.yucli.memory.LongTermMemory;
 import com.yucli.memory.MemoryManager;
+import com.yucli.runtime.CancellationContext;
+import com.yucli.runtime.CancellationToken;
 import com.yucli.tool.ToolRegistry;
 
 import java.io.File;
@@ -392,6 +394,55 @@ class AgentOrchestratorTest {
         assertTrue(finalResult.contains("未完全完成"));
         assertTrue(finalResult.contains("[step_1] ❌ 第一步"));
         assertTrue(finalResult.contains("[step_2] ⏳ 第二步"));
+    }
+
+    @Test
+    void shouldReturnCancelledWhenReviewerCancelsAfterWorkerResult(@TempDir Path tempDir) {
+        CancellationToken token = CancellationContext.startRun();
+        java.io.PrintStream originalOut = System.out;
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        System.setOut(new java.io.PrintStream(output, true, java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            Function<String, LlmClient.ChatResponse> dispatcher = body -> {
+                if (body.contains("review cancel task")) {
+                    return response("""
+                            {
+                              "summary": "single step",
+                              "steps": [
+                                {"id": "s1", "description": "do one step", "type": "ANALYSIS", "dependencies": []}
+                              ]
+                            }
+                            """);
+                }
+                if (body.contains("worker-result")) {
+                    CancellationContext.current().cancel();
+                    return response("""
+                            {"approved": true, "summary": "approved after cancel", "issues": []}
+                            """);
+                }
+                if (body.contains("do one step")) {
+                    return response("worker-result");
+                }
+                return null;
+            };
+
+            AgentOrchestrator orchestrator = new AgentOrchestrator(
+                    new DispatchingStubGLMClient(dispatcher),
+                    new ToolRegistry(),
+                    new NoOpMemoryManager(tempDir.toFile())
+            );
+
+            String finalResult = orchestrator.run("review cancel task");
+
+            assertTrue(finalResult.contains("取消"), "orchestrator should surface cancellation: " + finalResult);
+            assertFalse(finalResult.contains("任务完成"), "cancelled run must not report completion: " + finalResult);
+            String consoleOutput = output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertFalse(consoleOutput.contains("审查通过"),
+                    "reviewer cancellation must stop before approval fallback: " + consoleOutput);
+        } finally {
+            System.setOut(originalOut);
+            CancellationContext.clear(token);
+        }
     }
 
     private static LlmClient.ChatResponse response(String content) {

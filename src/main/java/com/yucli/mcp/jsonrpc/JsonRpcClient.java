@@ -24,6 +24,8 @@ public class JsonRpcClient implements AutoCloseable {
     private final McpTransport transport;
     private final AtomicLong ids = new AtomicLong(1);
     private final ConcurrentHashMap<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
+    private final Object lifecycleLock = new Object();
+    private volatile boolean closed;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "YuCLI-mcp-jsonrpc-timeout");
         thread.setDaemon(true);
@@ -52,13 +54,18 @@ public class JsonRpcClient implements AutoCloseable {
         }
 
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
-        pending.put(id, future);
-        scheduler.schedule(() -> {
-            CompletableFuture<JsonNode> removed = pending.remove(id);
-            if (removed != null) {
-                removed.completeExceptionally(new TimeoutException("JSON-RPC request timed out: " + method));
+        synchronized (lifecycleLock) {
+            if (closed) {
+                throw new IOException("JSON-RPC client closed");
             }
-        }, timeoutSeconds, TimeUnit.SECONDS);
+            pending.put(id, future);
+            scheduler.schedule(() -> {
+                CompletableFuture<JsonNode> removed = pending.remove(id);
+                if (removed != null) {
+                    removed.completeExceptionally(new TimeoutException("JSON-RPC request timed out: " + method));
+                }
+            }, timeoutSeconds, TimeUnit.SECONDS);
+        }
 
         try {
             transport.send(request);
@@ -160,7 +167,16 @@ public class JsonRpcClient implements AutoCloseable {
 
     @Override
     public void close() {
-        scheduler.shutdownNow();
+        IOException closed = new IOException("JSON-RPC client closed");
+        synchronized (lifecycleLock) {
+            if (this.closed) {
+                return;
+            }
+            this.closed = true;
+            pending.forEach((id, future) -> future.completeExceptionally(closed));
+            pending.clear();
+            scheduler.shutdownNow();
+        }
         transport.close();
     }
 }

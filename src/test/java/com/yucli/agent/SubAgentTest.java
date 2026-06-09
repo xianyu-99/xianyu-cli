@@ -2,6 +2,8 @@ package com.yucli.agent;
 
 import com.yucli.llm.GLMClient;
 import com.yucli.llm.LlmClient;
+import com.yucli.runtime.CancellationContext;
+import com.yucli.runtime.CancellationToken;
 import com.yucli.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -11,8 +13,10 @@ import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -138,6 +142,25 @@ class SubAgentTest {
         assertTrue(output.contains("答案"), "content should still appear");
     }
 
+    @Test
+    void shouldStopBeforeToolsWhenCancelledAfterLlmToolCallResponse() {
+        CancellationToken token = CancellationContext.startRun();
+        CancelThenToolCallClient llm = new CancelThenToolCallClient();
+        CountingToolRegistry tools = new CountingToolRegistry();
+        SubAgent worker = new SubAgent("cancel-worker", AgentRole.WORKER, llm, tools);
+
+        try {
+            AgentMessage result = worker.execute(AgentMessage.task("orchestrator", "cancel after llm"));
+
+            assertEquals(AgentMessage.Type.ERROR, result.type());
+            assertTrue(result.content().contains("取消"), "SubAgent should return a cancellation error");
+            assertEquals(0, tools.executeToolsCalls.get(), "Cancelled SubAgent must not execute tool calls");
+            assertEquals(1, llm.chatCalls.get(), "Cancelled SubAgent must not enter a second LLM round");
+        } finally {
+            CancellationContext.clear(token);
+        }
+    }
+
     private boolean invokeShouldUseTools(SubAgent agent) throws Exception {
         Method method = SubAgent.class.getDeclaredMethod("shouldUseTools");
         method.setAccessible(true);
@@ -194,6 +217,46 @@ class SubAgentTest {
             CallScript next = iter.next();
             next.streamScript().accept(listener);
             return next.response();
+        }
+    }
+
+    private static final class CancelThenToolCallClient extends GLMClient {
+        private final AtomicInteger chatCalls = new AtomicInteger();
+
+        private CancelThenToolCallClient() {
+            super("test-key");
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
+            return chat(messages, tools, StreamListener.NO_OP);
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) throws IOException {
+            int call = chatCalls.incrementAndGet();
+            if (call > 1) {
+                throw new IOException("SubAgent should not call LLM again after cancellation");
+            }
+            CancellationContext.current().cancel();
+            return new ChatResponse(
+                    "assistant",
+                    "will call tool",
+                    null,
+                    List.of(new ToolCall("call_1", new ToolCall.Function("list_dir", "{\"path\":\".\"}"))),
+                    10,
+                    5
+            );
+        }
+    }
+
+    private static final class CountingToolRegistry extends ToolRegistry {
+        private final AtomicInteger executeToolsCalls = new AtomicInteger();
+
+        @Override
+        public List<ToolExecutionResult> executeTools(List<ToolInvocation> invocations) {
+            executeToolsCalls.incrementAndGet();
+            return List.of();
         }
     }
 }

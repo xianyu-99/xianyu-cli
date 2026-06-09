@@ -175,10 +175,8 @@ public class Main {
             }
 
             com.yucli.skill.SkillRegistry skillRegistry = new com.yucli.skill.SkillRegistry();
-            Path userSkillsDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
-            if (Files.isDirectory(userSkillsDir)) {
-                skillRegistry.loadUserSkills(userSkillsDir);
-            }
+            Path userSkillsDir = userSkillsDir();
+            skillRegistry.loadUserSkills(userSkillsDir);
             reactAgent.setSkillRegistry(skillRegistry);
 
             SessionManager sessionManager = new SessionManager(reactAgent.getMemoryManager());
@@ -288,10 +286,6 @@ public class Main {
                     }
                     case SKILL_RELOAD -> {
                         reactAgent.getSkillRegistry().reload();
-                        Path reloadDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
-                        if (Files.isDirectory(reloadDir)) {
-                            reactAgent.getSkillRegistry().loadUserSkills(reloadDir);
-                        }
                         System.out.println("🔄 Skill 已重新加载\n");
                         System.out.println(reactAgent.getSkillRegistry().getStatusText());
                         System.out.println();
@@ -1325,5 +1319,9 @@ public class Main {
         System.out.printf("| MCP-Native Agent CLI %-35s|%n", "v" + VERSION);
         System.out.println("+----------------------------------------------------------+");
         System.out.println();
+    }
+
+    static Path userSkillsDir() {
+        return Path.of(System.getProperty("user.home"), ".YuCLI", "skills");
     }
 }

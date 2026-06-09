@@ -54,6 +54,16 @@ class VectorStoreTest {
     }
 
     @Test
+    void searchReturnsEmptyForNonPositiveTopK() throws Exception {
+        CodeChunk chunk = CodeChunk.classChunk("Test.java", "TestClass",
+                "public class TestClass {}", 1, 1);
+        store.insertChunks(List.of(new VectorStore.CodeChunkEntry(chunk, new float[]{1.0f})));
+
+        assertTrue(store.search(new float[]{1.0f}, 0).isEmpty());
+        assertTrue(store.search(new float[]{1.0f}, -1).isEmpty());
+    }
+
+    @Test
     void testSearchByKeyword() throws Exception {
         CodeChunk chunk = CodeChunk.classChunk("Foo.java", "FooService",
                 "public class FooService { public void bar() {} }", 1, 3);

@@ -54,6 +54,11 @@ public class ExecutionPlan {
                 dep.addDependent(task.getId());
             }
         }
+        for (Task existingTask : tasks.values()) {
+            if (existingTask.getDependencies().contains(task.getId())) {
+                task.addDependent(existingTask.getId());
+            }
+        }
     }
 
     /**

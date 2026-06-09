@@ -6,13 +6,16 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 public class SessionSerializer {
     private static final String STORAGE_DIR_NAME = "sessions";
+    private static final Pattern SAFE_SESSION_ID = Pattern.compile("[A-Za-z0-9._-]+");
     private final ObjectMapper mapper;
     private final File storageDir;
 
@@ -31,7 +34,7 @@ public class SessionSerializer {
     }
 
     public void save(Session session) {
-        File file = new File(storageDir, session.getSessionId() + ".json");
+        File file = resolveSessionFile(session.getSessionId());
         try {
             mapper.writeValue(file, session);
         } catch (IOException e) {
@@ -40,7 +43,12 @@ public class SessionSerializer {
     }
 
     public Session load(String sessionId) {
-        File file = new File(storageDir, sessionId + ".json");
+        File file;
+        try {
+            file = resolveSessionFile(sessionId);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
         if (!file.exists()) {
             return null;
         }
@@ -65,13 +73,18 @@ public class SessionSerializer {
                         return null;
                     }
                 })
-                .filter(s -> s != null)
+                .filter(s -> s != null && isSafeSessionId(s.getSessionId()))
                 .sorted((a, b) -> Long.compare(b.getUpdatedAt(), a.getUpdatedAt()))
                 .collect(Collectors.toList());
     }
 
     public boolean delete(String sessionId) {
-        File file = new File(storageDir, sessionId + ".json");
+        File file;
+        try {
+            file = resolveSessionFile(sessionId);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
         return file.exists() && file.delete();
     }
 
@@ -81,5 +94,24 @@ public class SessionSerializer {
 
     private static File resolveStorageDir() {
         return new File(new File(System.getProperty("user.home"), ".YuCLI"), STORAGE_DIR_NAME);
+    }
+
+    File resolveSessionFile(String sessionId) {
+        if (!isSafeSessionId(sessionId)) {
+            throw new IllegalArgumentException("非法会话 ID: " + sessionId);
+        }
+        Path base = storageDir.toPath().toAbsolutePath().normalize();
+        Path file = base.resolve(sessionId + ".json").normalize();
+        if (!file.startsWith(base)) {
+            throw new IllegalArgumentException("非法会话 ID: " + sessionId);
+        }
+        return file.toFile();
+    }
+
+    static boolean isSafeSessionId(String sessionId) {
+        return sessionId != null
+                && !sessionId.isBlank()
+                && !sessionId.contains("..")
+                && SAFE_SESSION_ID.matcher(sessionId).matches();
     }
 }

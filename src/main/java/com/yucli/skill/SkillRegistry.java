@@ -10,6 +10,7 @@ public class SkillRegistry {
 
     private final Map<String, Skill> skills = new LinkedHashMap<>();
     private final Set<String> disabled = new HashSet<>();
+    private Path userSkillsDir;
 
     public SkillRegistry() {
         // 加载内置 skill
@@ -23,6 +24,7 @@ public class SkillRegistry {
      * 从用户目录加载自定义 skill。
      */
     public void loadUserSkills(Path userSkillsDir) {
+        this.userSkillsDir = userSkillsDir;
         List<Skill> loaded = SkillLoader.loadFromDirectory(userSkillsDir);
         for (Skill s : loaded) {
             // 用户 skill 可以覆盖内置 skill
@@ -64,6 +66,12 @@ public class SkillRegistry {
         List<Skill> builtins = SkillLoader.loadBuiltinSkills();
         for (Skill s : builtins) {
             skills.put(s.name(), s);
+        }
+        if (userSkillsDir != null) {
+            List<Skill> loaded = SkillLoader.loadFromDirectory(userSkillsDir);
+            for (Skill s : loaded) {
+                skills.put(s.name(), s);
+            }
         }
     }
 

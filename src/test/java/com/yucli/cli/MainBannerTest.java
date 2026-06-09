@@ -6,7 +6,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,5 +31,12 @@ class MainBannerTest {
         String banner = out.toString(StandardCharsets.UTF_8);
         assertTrue(banner.contains("YuCLI"), "Banner must show the current product name clearly");
         assertFalse(banner.contains("PAICLI"), "Banner must not show the old product name");
+    }
+
+    @Test
+    void userSkillsDirectoryUsesCanonicalYuCliHome() {
+        Path expected = Path.of(System.getProperty("user.home"), ".YuCLI", "skills");
+
+        assertEquals(expected, Main.userSkillsDir());
     }
 }

@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolRegistryTest {
@@ -40,6 +41,35 @@ class ToolRegistryTest {
         String result = registry.executeTool("execute_command", "{\"command\":\"find / -name \\\"pom.xml\\\" -type f | head -20\"}");
 
         assertTrue(result.contains("策略拒绝"));
+    }
+
+    @Test
+    void shouldRejectUnknownProjectTypeWithoutCreatingDirectory() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+
+            String result = registry.executeTool("create_project",
+                    "{\"name\":\"bad-project\",\"type\":\"ruby\"}");
+
+            assertTrue(result.contains("不支持的项目类型"), "实际输出: " + result);
+            assertFalse(Files.exists(tempDir.resolve("bad-project")));
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("bad-project")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void shouldNormalizeSearchCodeTopKWithinSupportedRange() {
+        assertEquals(5, ToolRegistry.normalizeSearchTopK(null));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK(""));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK("abc"));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK("0"));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK("-3"));
+        assertEquals(7, ToolRegistry.normalizeSearchTopK("7"));
+        assertEquals(20, ToolRegistry.normalizeSearchTopK("100"));
     }
 
     @Test

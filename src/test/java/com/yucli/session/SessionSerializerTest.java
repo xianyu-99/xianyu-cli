@@ -1,10 +1,13 @@
 package com.yucli.session;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -167,6 +170,44 @@ class SessionSerializerTest {
     @Test
     void deleteNonExistentReturnsFalse() {
         assertFalse(serializer.delete("no-such-id"));
+    }
+
+    @Test
+    void loadRejectsTraversalSessionId() throws Exception {
+        Path outside = tempDir.toPath().resolveSibling("outside.json");
+        try {
+            new ObjectMapper().writeValue(outside.toFile(), new Session("outside", 1L));
+
+            assertNull(serializer.load("../outside"));
+        } finally {
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    @Test
+    void deleteRejectsTraversalSessionIdAndDoesNotDeleteOutsideFile() throws Exception {
+        Path outside = tempDir.toPath().resolveSibling("outside.json");
+        try {
+            Files.writeString(outside, "outside");
+
+            assertFalse(serializer.delete("../outside"));
+            assertTrue(Files.exists(outside));
+        } finally {
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    @Test
+    void saveRejectsTraversalSessionIdAndDoesNotWriteOutsideStorage() throws Exception {
+        Path outside = tempDir.toPath().resolveSibling("outside.json");
+        try {
+            Session session = new Session("../outside", System.currentTimeMillis());
+
+            assertThrows(IllegalArgumentException.class, () -> serializer.save(session));
+            assertFalse(Files.exists(outside));
+        } finally {
+            Files.deleteIfExists(outside);
+        }
     }
 
     @Test

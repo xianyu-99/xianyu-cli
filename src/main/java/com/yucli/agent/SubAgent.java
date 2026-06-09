@@ -3,6 +3,7 @@ package com.yucli.agent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yucli.llm.LlmClient;
+import com.yucli.runtime.CancellationContext;
 import com.yucli.tool.ToolRegistry;
 import com.yucli.tool.ToolRegistry.ToolExecutionResult;
 import com.yucli.tool.ToolRegistry.ToolInvocation;
@@ -166,6 +167,11 @@ public class SubAgent {
 
         // 与 Agent.java 对称：主退出条件 = LLM 自决，budget 仅在 token / 停滞 / 硬轮数兜底。
         while (true) {
+            if (CancellationContext.isCancelled()) {
+                log.info("[{}] run cancelled before iteration", name);
+                return cancelledResult(streamRenderer);
+            }
+
             AgentBudget.ExitReason exitReason = budget.check();
             if (exitReason != AgentBudget.ExitReason.WITHIN_BUDGET) {
                 streamRenderer.finish();
@@ -185,6 +191,10 @@ public class SubAgent {
                         shouldUseTools() ? toolRegistry.getToolDefinitions() : null,
                         streamRenderer
                 );
+                if (CancellationContext.isCancelled()) {
+                    log.info("[{}] run cancelled after LLM response", name);
+                    return cancelledResult(streamRenderer);
+                }
 
                 budget.recordTokens(response.inputTokens(), response.outputTokens());
 
@@ -202,6 +212,10 @@ public class SubAgent {
                     streamRenderer.resetBetweenIterations();
 
                     List<ToolExecutionResult> toolResults = executeToolCalls(response.toolCalls());
+                    if (CancellationContext.isCancelled()) {
+                        log.info("[{}] run cancelled after tool execution", name);
+                        return cancelledResult(streamRenderer);
+                    }
                     for (ToolExecutionResult toolResult : toolResults) {
                         conversationHistory.add(LlmClient.Message.tool(toolResult.id(), toolResult.result()));
                     }
@@ -225,6 +239,11 @@ public class SubAgent {
                 return AgentMessage.error(name, role, "LLM 调用失败: " + e.getMessage());
             }
         }
+    }
+
+    private AgentMessage cancelledResult(SubAgentStreamRenderer streamRenderer) {
+        streamRenderer.finish();
+        return AgentMessage.error(name, role, "用户取消了当前子 Agent 任务");
     }
 
     /**

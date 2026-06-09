@@ -41,6 +41,8 @@ public class ToolRegistry {
     private static final int DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS = 90;
     private static final int MAX_PARALLEL_TOOLS = 4;
     private static final int MAX_COMMAND_OUTPUT_CHARS = 8_000;
+    private static final int DEFAULT_SEARCH_TOP_K = 5;
+    private static final int MAX_SEARCH_TOP_K = 20;
     // write_file 单次写入字节数上限。LLM 想塞超大内容时通常是误生成（重复粘贴 / hallucinate 大段日志），
     // 5MB 对常规代码生成 / 文档撰写完全够用，超过即拒，避免磁盘灌满与误覆盖。
     private static final int MAX_WRITE_FILE_BYTES = 5 * 1024 * 1024;
@@ -201,11 +203,18 @@ public class ToolRegistry {
                 args -> {
                     String name = args.get("name");
                     String type = args.get("type");
+                    if (type == null || type.isBlank()) {
+                        return "不支持的项目类型: " + type + "，仅支持 java/python/node";
+                    }
+                    String normalizedType = type.toLowerCase(Locale.ROOT);
+                    if (!Set.of("java", "python", "node").contains(normalizedType)) {
+                        return "不支持的项目类型: " + type + "，仅支持 java/python/node";
+                    }
                     Path projectRoot = pathGuard.resolveSafe(name);
                     try {
                         Files.createDirectories(projectRoot);
 
-                        switch (type.toLowerCase()) {
+                        switch (normalizedType) {
                             case "java" -> {
                                 Files.createDirectories(projectRoot.resolve("src/main/java"));
                                 Files.createDirectories(projectRoot.resolve("src/main/resources"));
@@ -228,7 +237,7 @@ public class ToolRegistry {
                                         String.format("{\"name\": \"%s\", \"version\": \"1.0.0\"}", name));
                             }
                         }
-                        return "项目已创建: " + name + " (类型: " + type + ")";
+                        return "项目已创建: " + name + " (类型: " + normalizedType + ")";
                     } catch (Exception e) {
                         return "创建项目失败: " + e.getMessage();
                     }
@@ -249,13 +258,7 @@ public class ToolRegistry {
                 ),
                 args -> {
                     String query = args.get("query");
-                    int topK = 5;
-                    try {
-                        if (args.containsKey("top_k")) {
-                            topK = Integer.parseInt(args.get("top_k"));
-                        }
-                    } catch (NumberFormatException ignored) {
-                    }
+                    int topK = normalizeSearchTopK(args.get("top_k"));
 
                     try (CodeRetriever retriever = new CodeRetriever(projectPath)) {
                         var stats = retriever.getStats();
@@ -395,6 +398,14 @@ public class ToolRegistry {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    static int normalizeSearchTopK(String value) {
+        int parsed = parseInt(value, DEFAULT_SEARCH_TOP_K);
+        if (parsed <= 0) {
+            return DEFAULT_SEARCH_TOP_K;
+        }
+        return Math.min(parsed, MAX_SEARCH_TOP_K);
     }
 
     private synchronized SearchProvider searchProvider() {

@@ -364,6 +364,15 @@ public class AgentOrchestrator {
         }
     }
 
+    private boolean cancelStepIfRequested(ExecutionStep step, List<ExecutionStep> steps, PrintStream out) {
+        if (!CancellationContext.isCancelled()) {
+            return false;
+        }
+        updateStep(steps, step.id(), step.withFailed("用户取消"));
+        out.println("⏹️ 步骤 [" + step.id() + "] 已取消\n");
+        return true;
+    }
+
     /**
      * 并行执行一批相互独立的步骤。
      *
@@ -454,9 +463,7 @@ public class AgentOrchestrator {
 
         AgentMessage taskMsg = AgentMessage.task("orchestrator", step.description());
         AgentMessage result = worker.executeWithContext(taskMsg, context, out);
-        if (CancellationContext.isCancelled()) {
-            updateStep(steps, step.id(), step.withFailed("用户取消"));
-            out.println("⏹️ 步骤 [" + step.id() + "] 已取消\n");
+        if (cancelStepIfRequested(step, steps, out)) {
             return;
         }
 
@@ -474,6 +481,9 @@ public class AgentOrchestrator {
         out.println("🔍 " + reviewer.getName() + " 正在审查步骤 [" + step.id() + "] 的结果...");
         AgentMessage reviewResult = reviewer.review(step.description(), result.content(), out);
         reviewer.clearHistory();
+        if (cancelStepIfRequested(step, steps, out)) {
+            return;
+        }
 
         if (reviewResult.type() == AgentMessage.Type.ERROR) {
             log.warn("Reviewer failed for step {}: {}", step.id(), reviewResult.content());
@@ -503,6 +513,9 @@ public class AgentOrchestrator {
 
             String feedbackContext = context + "\n\n之前的执行结果被审查拒绝，原因：\n" + issues;
             AgentMessage retryResult = worker.executeWithContext(taskMsg, feedbackContext, out);
+            if (cancelStepIfRequested(step, steps, out)) {
+                return;
+            }
             if (retryResult.type() == AgentMessage.Type.ERROR) {
                 log.warn("Step {} retry {} failed at LLM layer: {}", step.id(), retries, retryResult.content());
                 issues = "重试时 LLM 调用失败：" + retryResult.content();
@@ -520,6 +533,9 @@ public class AgentOrchestrator {
             acceptedResult = retryResult.content();
             AgentMessage retryReview = reviewer.review(step.description(), acceptedResult, out);
             reviewer.clearHistory();
+            if (cancelStepIfRequested(step, steps, out)) {
+                return;
+            }
 
             if (retryReview.type() == AgentMessage.Type.ERROR) {
                 log.warn("Reviewer failed for step {} retry {}: {}", step.id(), retries, retryReview.content());

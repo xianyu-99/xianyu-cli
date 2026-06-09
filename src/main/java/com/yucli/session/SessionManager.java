@@ -51,7 +51,7 @@ public class SessionManager {
         if (session == null) {
             throw new IOException("会话不存在: " + sessionId);
         }
-        File source = new File(serializer.getStorageDir(), sessionId + ".json");
+        File source = serializer.resolveSessionFile(sessionId);
         File target = new File(path);
         if (target.isDirectory()) {
             target = new File(target, sessionId + ".json");
@@ -97,9 +97,12 @@ public class SessionManager {
     }
 
     public Session findSessionByPartialId(String partialId) {
+        if (!SessionSerializer.isSafeSessionId(partialId)) {
+            return null;
+        }
         List<Session> sessions = serializer.listAll();
         return sessions.stream()
-                .filter(s -> s.getSessionId().startsWith(partialId))
+                .filter(s -> s.getSessionId() != null && s.getSessionId().startsWith(partialId))
                 .findFirst()
                 .orElse(null);
     }

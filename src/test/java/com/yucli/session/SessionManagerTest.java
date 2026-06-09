@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -99,6 +100,30 @@ class SessionManagerTest {
         Session exported = sessionManager.loadSession(session.getSessionId());
         assertNotNull(exported);
         assertEquals("export test", exported.getTaskSummary());
+    }
+
+    @Test
+    void exportSessionRejectsTraversalSessionId() throws Exception {
+        Path outside = tempDir.resolve("outside.json");
+        Path exportPath = tempDir.resolve("exported-outside.json");
+        try {
+            Files.writeString(outside, """
+                    {
+                      "sessionId": "outside",
+                      "createdAt": 1,
+                      "updatedAt": 1,
+                      "messages": []
+                    }
+                    """);
+
+            IOException ex = assertThrows(IOException.class,
+                    () -> sessionManager.exportSession("../outside", exportPath.toString()));
+            assertTrue(ex.getMessage().contains("会话不存在"));
+            assertFalse(Files.exists(exportPath));
+        } finally {
+            Files.deleteIfExists(outside);
+            Files.deleteIfExists(exportPath);
+        }
     }
 
     @Test

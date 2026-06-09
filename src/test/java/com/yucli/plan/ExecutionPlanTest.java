@@ -61,6 +61,18 @@ class ExecutionPlanTest {
     }
 
     @Test
+    void addTaskBackfillsDependentsWhenParentIsAddedAfterChild() {
+        ExecutionPlan plan = new ExecutionPlan("plan_4", "demo");
+        Task task1 = new Task("task_1", "create project", Task.TaskType.COMMAND);
+        Task task2 = new Task("task_2", "read pom", Task.TaskType.FILE_READ, List.of("task_1"));
+
+        plan.addTask(task2);
+        plan.addTask(task1);
+
+        assertEquals(List.of("task_2"), plan.getTask("task_1").getDependents());
+    }
+
+    @Test
     void executableTasksCanExposeParallelBatch() {
         ExecutionPlan plan = new ExecutionPlan("plan_4", "demo");
         Task task1 = new Task("task_1", "read pom", Task.TaskType.FILE_READ);

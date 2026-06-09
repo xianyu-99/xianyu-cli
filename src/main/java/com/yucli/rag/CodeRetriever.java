@@ -33,6 +33,9 @@ public class CodeRetriever implements AutoCloseable {
      * 语义检索：用自然语言查询最相关的代码块
      */
     public List<VectorStore.SearchResult> semanticSearch(String query, int topK) throws Exception {
+        if (topK <= 0) {
+            return List.of();
+        }
         float[] queryEmbedding = embeddingClient.embed(query);
         return vectorStore.search(queryEmbedding, topK);
     }
@@ -48,6 +51,10 @@ public class CodeRetriever implements AutoCloseable {
      * 混合检索：同时进行语义检索和关键词检索，合并去重
      */
     public List<VectorStore.SearchResult> hybridSearch(String query, int topK) throws Exception {
+        if (topK <= 0) {
+            return List.of();
+        }
+
         Map<String, VectorStore.SearchResult> merged = new LinkedHashMap<>();
         Set<String> dualMatchBonused = new HashSet<>();
 
