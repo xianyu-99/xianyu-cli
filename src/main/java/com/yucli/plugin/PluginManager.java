@@ -3,6 +3,7 @@ package com.yucli.plugin;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.yucli.tool.ToolRegistry;
+import com.yucli.web.SearchProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -105,7 +106,7 @@ public class PluginManager {
                 plugin.onLoad(context);
 
                 PluginInfo info = new PluginInfo(plugin, PluginState.LOADED, jarPath, classLoader,
-                        context.toolDeclarations());
+                        context.toolDeclarations(), context.searchProvider());
                 plugins.put(name, info);
                 anyRegistered = true;
                 log.info("插件已加载: {} v{}", name, plugin.version());
@@ -131,6 +132,7 @@ public class PluginManager {
             info.instance().onEnable();
             registerPluginTools(info);
             info.setState(PluginState.ENABLED);
+            applyPluginSearchProvider(info);
             persistedState.put(name, true);
             savePersistedState();
             log.info("插件已启用: {}", name);
@@ -154,6 +156,7 @@ public class PluginManager {
             info.instance().onDisable();
             unregisterPluginTools(name);
             info.setState(PluginState.DISABLED);
+            refreshSearchProviderFromEnabledPlugins();
             persistedState.put(name, false);
             savePersistedState();
             log.info("插件已禁用: {}", name);
@@ -177,6 +180,7 @@ public class PluginManager {
             unregisterPluginTools(name);
             info.instance().onUnload();
             plugins.remove(name);
+            refreshSearchProviderFromEnabledPlugins();
 
             // Only close classLoader if no other plugins share it
             boolean shared = plugins.values().stream()
@@ -227,6 +231,22 @@ public class PluginManager {
 
     private void unregisterPluginTools(String name) {
         toolRegistry.unregisterPluginTools("plugin__" + name + "__");
+    }
+
+    private void applyPluginSearchProvider(PluginInfo info) {
+        if (info.searchProvider() != null) {
+            toolRegistry.setSearchProvider(info.searchProvider());
+        }
+    }
+
+    private void refreshSearchProviderFromEnabledPlugins() {
+        SearchProvider provider = null;
+        for (PluginInfo info : plugins.values()) {
+            if (info.state() == PluginState.ENABLED && info.searchProvider() != null) {
+                provider = info.searchProvider();
+            }
+        }
+        toolRegistry.setSearchProvider(provider);
     }
 
     @SuppressWarnings("unchecked")

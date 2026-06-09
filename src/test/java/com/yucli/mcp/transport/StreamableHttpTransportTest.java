@@ -9,10 +9,19 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -54,8 +63,8 @@ class StreamableHttpTransportTest {
 
     @Test
     void parsesSseStreamWithMultipleDataMessages() throws Exception {
-        String sseBody = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"step\":1}}\n\n"
-                + "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"step\":2}}\n\n";
+        String sseBody = "data: {\"jsonrpc\":\"2.0\",\"method\":\"progress\",\"params\":{\"step\":1}}\n\n"
+                + "data: {\"jsonrpc\":\"2.0\",\"method\":\"progress\",\"params\":{\"step\":2}}\n\n";
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody(sseBody));
@@ -68,8 +77,73 @@ class StreamableHttpTransportTest {
         transport.send(MAPPER.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sub\"}"));
 
         assertEquals(2, received.size());
-        assertEquals(1, received.get(0).path("result").path("step").asInt());
-        assertEquals(2, received.get(1).path("result").path("step").asInt());
+        assertEquals(1, received.get(0).path("params").path("step").asInt());
+        assertEquals(2, received.get(1).path("params").path("step").asInt());
+    }
+
+    @Test
+    void dispatchesSseEventBeforeLongLivedConnectionCloses() throws Exception {
+        CountDownLatch eventWritten = new CountDownLatch(1);
+        CountDownLatch closeServer = new CountDownLatch(1);
+        ServerSocket serverSocket = new ServerSocket(0);
+        ExecutorService serverExecutor = Executors.newSingleThreadExecutor();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            serverExecutor.submit(() -> {
+                try (Socket socket = serverSocket.accept()) {
+                    drainRequestHeaders(socket);
+                    OutputStream out = socket.getOutputStream();
+                    out.write(("HTTP/1.1 200 OK\r\n"
+                            + "Content-Type: text/event-stream\r\n"
+                            + "Transfer-Encoding: chunked\r\n"
+                            + "\r\n").getBytes(StandardCharsets.UTF_8));
+                    byte[] event = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n"
+                            .getBytes(StandardCharsets.UTF_8);
+                    out.write(Integer.toHexString(event.length).getBytes(StandardCharsets.UTF_8));
+                    out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+                    out.write(event);
+                    out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    eventWritten.countDown();
+                    closeServer.await(5, TimeUnit.SECONDS);
+                } catch (Exception ignored) {
+                }
+            });
+
+            StreamableHttpTransport transport = new StreamableHttpTransport(
+                    "http://127.0.0.1:" + serverSocket.getLocalPort() + "/mcp", Map.of());
+            CountDownLatch received = new CountDownLatch(1);
+            transport.onReceive(node -> {
+                if (node.path("result").path("ok").asBoolean()) {
+                    received.countDown();
+                }
+            });
+
+            var sendFuture = executor.submit(() -> {
+                try {
+                    transport.send(MAPPER.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sub\"}"));
+                } catch (Exception ignored) {
+                }
+            });
+
+            assertTrue(eventWritten.await(2, TimeUnit.SECONDS), "test server should write the first SSE event");
+            assertTrue(received.await(2, TimeUnit.SECONDS), "SSE event should be dispatched before EOF");
+            assertDoesNotThrow(() -> sendFuture.get(2, TimeUnit.SECONDS),
+                    "send should return after receiving the matching SSE response id");
+        } finally {
+            closeServer.countDown();
+            serverSocket.close();
+            serverExecutor.shutdownNow();
+            executor.shutdownNow();
+        }
+    }
+
+    private static void drainRequestHeaders(Socket socket) throws IOException {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        String line;
+        while ((line = reader.readLine()) != null && !line.isEmpty()) {
+            // drain headers
+        }
     }
 
     @Test

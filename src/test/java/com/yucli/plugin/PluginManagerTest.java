@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.yucli.tool.ToolRegistry;
+import com.yucli.web.SearchProvider;
+import com.yucli.web.SearchResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -11,6 +13,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -152,11 +155,44 @@ class PluginManagerTest {
         assertTrue(registry.hasTool("plugin__demo__ping"));
     }
 
+    @Test
+    void deferredContextDoesNotApplySearchProviderDuringLoad() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        PluginContext context = PluginContext.deferred(registry, tempDir, "search-demo");
+
+        context.registerSearchProvider(new FakeSearchProvider("plugin-search"));
+
+        assertNull(readSearchProvider(registry));
+    }
+
+    @Test
+    void enableAfterDisableControlsPluginSearchProvider() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+        SearchProviderPlugin plugin = new SearchProviderPlugin();
+        PluginContext context = PluginContext.deferred(registry, tempDir, plugin.name());
+        plugin.onLoad(context);
+        putPlugin(manager, plugin.name(), new PluginInfo(plugin, PluginState.LOADED, "test.jar", null,
+                context.toolDeclarations(), context.searchProvider()));
+
+        manager.enablePlugin("search-demo");
+        assertSame(plugin.provider, readSearchProvider(registry));
+
+        manager.disablePlugin("search-demo");
+        assertNull(readSearchProvider(registry));
+    }
+
     @SuppressWarnings("unchecked")
     private static void putPlugin(PluginManager manager, String name, PluginInfo info) throws Exception {
         Field field = PluginManager.class.getDeclaredField("plugins");
         field.setAccessible(true);
         ((Map<String, PluginInfo>) field.get(manager)).put(name, info);
+    }
+
+    private static SearchProvider readSearchProvider(ToolRegistry registry) throws Exception {
+        Field field = ToolRegistry.class.getDeclaredField("searchProvider");
+        field.setAccessible(true);
+        return (SearchProvider) field.get(registry);
     }
 
     static class TestPlugin implements YuPlugin {
@@ -216,5 +252,45 @@ class PluginManagerTest {
 
         @Override
         public void onUnload() {}
+    }
+
+    static class SearchProviderPlugin implements YuPlugin {
+        final SearchProvider provider = new FakeSearchProvider("plugin-search");
+
+        @Override
+        public String name() { return "search-demo"; }
+
+        @Override
+        public String description() { return "search demo"; }
+
+        @Override
+        public String version() { return "1.0.0"; }
+
+        @Override
+        public void onLoad(PluginContext context) {
+            context.registerSearchProvider(provider);
+        }
+
+        @Override
+        public void onEnable() {}
+
+        @Override
+        public void onDisable() {}
+
+        @Override
+        public void onUnload() {}
+    }
+
+    record FakeSearchProvider(String name) implements SearchProvider {
+        @Override
+        public boolean isReady() { return true; }
+
+        @Override
+        public String unavailableHint() { return ""; }
+
+        @Override
+        public List<SearchResult> search(String query, int topK) {
+            return List.of();
+        }
     }
 }

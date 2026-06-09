@@ -14,6 +14,7 @@ public class PluginContext {
     private final String pluginName;
     private final boolean registerImmediately;
     private final List<ToolDeclaration> toolDeclarations = new ArrayList<>();
+    private SearchProvider searchProvider;
 
     public PluginContext(ToolRegistry toolRegistry, Path configDir, String pluginName) {
         this(toolRegistry, configDir, pluginName, true);
@@ -43,11 +44,18 @@ public class PluginContext {
     }
 
     public void registerSearchProvider(SearchProvider provider) {
-        toolRegistry.setSearchProvider(provider);
+        this.searchProvider = provider;
+        if (registerImmediately) {
+            toolRegistry.setSearchProvider(provider);
+        }
     }
 
     public Path getConfigDir() {
         return configDir;
+    }
+
+    SearchProvider searchProvider() {
+        return searchProvider;
     }
 
     record ToolDeclaration(String name, String description, JsonNode parameters, ToolExecutor executor) {}

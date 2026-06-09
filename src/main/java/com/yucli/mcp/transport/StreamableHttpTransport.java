@@ -9,11 +9,11 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.BufferedSource;
 
 import com.yucli.mcp.auth.TokenProvider;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -90,17 +90,14 @@ public class StreamableHttpTransport implements McpTransport {
                 return;
             }
             String contentType = response.header("Content-Type", "");
-            String raw = responseBody.string();
-            if (raw == null || raw.isBlank()) {
-                return;
-            }
-            List<JsonNode> messages = contentType.contains("text/event-stream")
-                    ? parseSse(raw)
-                    : List.of(MAPPER.readTree(raw));
-            for (JsonNode node : messages) {
-                for (Consumer<JsonNode> listener : listeners) {
-                    listener.accept(node);
+            if (contentType.toLowerCase(java.util.Locale.ROOT).contains("text/event-stream")) {
+                streamSse(responseBody, message.path("id").asText(null));
+            } else {
+                String raw = responseBody.string();
+                if (raw == null || raw.isBlank()) {
+                    return;
                 }
+                dispatch(MAPPER.readTree(raw));
             }
         }
     }
@@ -141,14 +138,25 @@ public class StreamableHttpTransport implements McpTransport {
         }
     }
 
-    private static List<JsonNode> parseSse(String raw) throws IOException {
-        List<JsonNode> messages = new ArrayList<>();
+    private void streamSse(ResponseBody responseBody, String requestId) throws IOException {
+        BufferedSource source = responseBody.source();
         StringBuilder data = new StringBuilder();
-        for (String line : raw.split("\\R")) {
+        while (true) {
+            String line = source.readUtf8Line();
+            if (line == null) {
+                if (!data.isEmpty()) {
+                    dispatch(MAPPER.readTree(data.toString()));
+                }
+                return;
+            }
             if (line.isBlank()) {
                 if (!data.isEmpty()) {
-                    messages.add(MAPPER.readTree(data.toString()));
+                    JsonNode node = MAPPER.readTree(data.toString());
                     data.setLength(0);
+                    dispatch(node);
+                    if (requestId != null && requestId.equals(node.path("id").asText(null))) {
+                        return;
+                    }
                 }
                 continue;
             }
@@ -157,9 +165,12 @@ public class StreamableHttpTransport implements McpTransport {
                 data.append(line.substring("data:".length()).trim());
             }
         }
-        if (!data.isEmpty()) {
-            messages.add(MAPPER.readTree(data.toString()));
-        }
-        return messages;
     }
+
+    private void dispatch(JsonNode node) {
+        for (Consumer<JsonNode> listener : listeners) {
+            listener.accept(node);
+        }
+    }
+
 }
