@@ -487,13 +487,14 @@ public class AgentOrchestrator {
 
         if (reviewResult.type() == AgentMessage.Type.ERROR) {
             log.warn("Reviewer failed for step {}: {}", step.id(), reviewResult.content());
-            out.println("⚠️ 步骤 [" + step.id() + "] 审查阶段 LLM 调用失败，保留当前执行结果\n");
-            updateStep(steps, step.id(), step.withResult(result.content()));
+            out.println("❌ 步骤 [" + step.id() + "] 审查阶段 LLM 调用失败，已标记为失败\n");
+            updateStep(steps, step.id(), step.withFailed("reviewer failed: " + reviewResult.content()));
             return;
         }
 
         boolean approved = parseReviewApproval(reviewResult.content());
         String acceptedResult = result.content();
+        boolean reviewerFailed = false;
 
         if (approved) {
             updateStep(steps, step.id(), step.withResult(acceptedResult));
@@ -539,8 +540,8 @@ public class AgentOrchestrator {
 
             if (retryReview.type() == AgentMessage.Type.ERROR) {
                 log.warn("Reviewer failed for step {} retry {}: {}", step.id(), retries, retryReview.content());
-                approved = true;
-                issues = "";
+                reviewerFailed = true;
+                issues = "reviewer failed: " + retryReview.content();
                 break;
             }
 
@@ -548,9 +549,15 @@ public class AgentOrchestrator {
             issues = parseReviewIssues(retryReview.content());
         }
 
-        updateStep(steps, step.id(), step.withResult(acceptedResult));
+        if (reviewerFailed) {
+            updateStep(steps, step.id(), step.withFailed(issues));
+        } else {
+            updateStep(steps, step.id(), step.withResult(acceptedResult));
+        }
         if (approved) {
             out.println("✅ 步骤 [" + step.id() + "] 重试后审查通过\n");
+        } else if (reviewerFailed) {
+            out.println("❌ 步骤 [" + step.id() + "] 审查阶段 LLM 调用失败，已标记为失败\n");
         } else {
             out.println("⚠️ 步骤 [" + step.id() + "] 超过最大重试次数，保留当前结果\n");
         }

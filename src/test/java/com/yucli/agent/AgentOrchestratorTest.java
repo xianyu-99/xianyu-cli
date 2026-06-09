@@ -397,6 +397,37 @@ class AgentOrchestratorTest {
     }
 
     @Test
+    void shouldNotCompleteStepWhenReviewerLlmFails(@TempDir Path tempDir) {
+        StubGLMClient llmClient = new StubGLMClient(List.of(
+                response("""
+                        {
+                          "summary": "single step",
+                          "steps": [
+                            {
+                              "id": "s1",
+                              "description": "do step",
+                              "type": "ANALYSIS",
+                              "dependencies": []
+                            }
+                          ]
+                        }
+                        """),
+                response("unreviewed worker result")
+        ));
+
+        AgentOrchestrator orchestrator = new AgentOrchestrator(
+                llmClient,
+                new ToolRegistry(),
+                new NoOpMemoryManager(tempDir.toFile())
+        );
+
+        String finalResult = orchestrator.run("reviewer fails");
+
+        assertFalse(finalResult.contains("unreviewed worker result"));
+        assertTrue(finalResult.contains("reviewer failed") || finalResult.contains("review failed"));
+    }
+
+    @Test
     void shouldReturnCancelledWhenReviewerCancelsAfterWorkerResult(@TempDir Path tempDir) {
         CancellationToken token = CancellationContext.startRun();
         java.io.PrintStream originalOut = System.out;
