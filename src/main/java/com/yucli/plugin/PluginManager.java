@@ -63,8 +63,12 @@ public class PluginManager {
         }
 
         for (PluginInfo info : plugins.values()) {
-            if (info.state() == PluginState.LOADED && shouldEnable(info.instance().name())) {
-                enablePlugin(info.instance().name());
+            if (info.state() == PluginState.LOADED) {
+                if (shouldEnable(info.instance().name())) {
+                    enablePlugin(info.instance().name());
+                } else {
+                    info.setState(PluginState.DISABLED);
+                }
             }
         }
     }
@@ -97,10 +101,11 @@ public class PluginManager {
                     continue;
                 }
 
-                PluginContext context = new PluginContext(toolRegistry, configDir, name);
+                PluginContext context = PluginContext.deferred(toolRegistry, configDir, name);
                 plugin.onLoad(context);
 
-                PluginInfo info = new PluginInfo(plugin, PluginState.LOADED, jarPath, classLoader);
+                PluginInfo info = new PluginInfo(plugin, PluginState.LOADED, jarPath, classLoader,
+                        context.toolDeclarations());
                 plugins.put(name, info);
                 anyRegistered = true;
                 log.info("插件已加载: {} v{}", name, plugin.version());
@@ -124,6 +129,7 @@ public class PluginManager {
 
         try {
             info.instance().onEnable();
+            registerPluginTools(info);
             info.setState(PluginState.ENABLED);
             persistedState.put(name, true);
             savePersistedState();
@@ -146,10 +152,10 @@ public class PluginManager {
 
         try {
             info.instance().onDisable();
+            unregisterPluginTools(name);
             info.setState(PluginState.DISABLED);
             persistedState.put(name, false);
             savePersistedState();
-            toolRegistry.unregisterPluginTools("plugin__" + name + "__");
             log.info("插件已禁用: {}", name);
         } catch (Exception e) {
             info.setState(PluginState.ERROR);
@@ -168,13 +174,14 @@ public class PluginManager {
             if (info.state() == PluginState.ENABLED) {
                 info.instance().onDisable();
             }
+            unregisterPluginTools(name);
             info.instance().onUnload();
             plugins.remove(name);
 
             // Only close classLoader if no other plugins share it
             boolean shared = plugins.values().stream()
                     .anyMatch(p -> p.classLoader() == info.classLoader());
-            if (!shared) {
+            if (!shared && info.classLoader() != null) {
                 info.classLoader().close();
             }
             log.info("插件已卸载: {}", name);
@@ -202,6 +209,24 @@ public class PluginManager {
     private boolean shouldEnable(String name) {
         Boolean enabled = persistedState.get(name);
         return enabled == null || enabled;
+    }
+
+    private void registerPluginTools(PluginInfo info) {
+        String name = info.instance().name();
+        unregisterPluginTools(name);
+        if (!info.toolDeclarationsCaptured()) {
+            PluginContext context = new PluginContext(toolRegistry, configDir, name);
+            info.instance().onLoad(context);
+            return;
+        }
+        for (PluginContext.ToolDeclaration declaration : info.toolDeclarations()) {
+            toolRegistry.registerPluginTool(name, declaration.name(), declaration.description(),
+                    declaration.parameters(), declaration.executor());
+        }
+    }
+
+    private void unregisterPluginTools(String name) {
+        toolRegistry.unregisterPluginTools("plugin__" + name + "__");
     }
 
     @SuppressWarnings("unchecked")

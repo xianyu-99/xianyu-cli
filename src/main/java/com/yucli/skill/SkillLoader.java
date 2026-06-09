@@ -1,27 +1,23 @@
 package com.yucli.skill;
 
 import java.io.IOException;
+import java.net.JarURLConnection;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 /**
- * Skill 加载器：扫描目录并解析 SKILL.md 文件。
- *
- * SKILL.md 格式：
- * <pre>
- * ---
- * name: web-access
- * description: 联网访问决策手册
- * triggers: [web, 搜索, browser]
- * ---
- *
- * # 指令正文
- * ...
- * </pre>
+ * Skill 加载器：扫描目录或 classpath 资源并解析 SKILL.md 文件。
  */
 public class SkillLoader {
 
@@ -41,24 +37,35 @@ public class SkillLoader {
                 }
             });
         } catch (IOException e) {
-            // 静默忽略：skills 目录不存在或不可读时返回空列表
+            // skills 目录不存在或不可读时保持启动容错，返回空列表。
         }
         return skills;
     }
 
     /**
-     * 从类路径资源目录加载内置 Skill。
+     * 从 classpath /skills 资源加载内置 Skill。
      */
     public static List<Skill> loadBuiltinSkills() {
+        return loadBuiltinSkills(SkillLoader.class.getClassLoader());
+    }
+
+    static List<Skill> loadBuiltinSkills(ClassLoader classLoader) {
+        if (classLoader == null) {
+            return Collections.emptyList();
+        }
+        List<Skill> skills = new ArrayList<>();
         try {
-            Path tempDir = extractBuiltinSkillsToTemp();
-            if (tempDir != null) {
-                return loadFromDirectory(tempDir);
+            Enumeration<URL> resources = classLoader.getResources("skills");
+            while (resources.hasMoreElements()) {
+                skills.addAll(loadBuiltinSkillsFromUrl(resources.nextElement()));
+            }
+            if (skills.isEmpty() && classLoader instanceof URLClassLoader urlClassLoader) {
+                skills.addAll(loadBuiltinSkillsFromUrlClassLoader(urlClassLoader));
             }
         } catch (Exception e) {
-            // 内置 skill 加载失败不阻断启动
+            // 内置 Skill 加载失败不阻断启动。
         }
-        return Collections.emptyList();
+        return skills;
     }
 
     private static Skill parseSkillDir(Path dir) {
@@ -116,7 +123,6 @@ public class SkillLoader {
             line = line.trim();
             if (line.startsWith(prefix)) {
                 String value = line.substring(prefix.length()).trim();
-                // 支持 YAML 数组格式: [a, b, c]
                 if (value.startsWith("[") && value.endsWith("]")) {
                     value = value.substring(1, value.length() - 1);
                 }
@@ -133,19 +139,65 @@ public class SkillLoader {
         return Collections.emptyList();
     }
 
-    private static Path extractBuiltinSkillsToTemp() throws IOException {
-        // 从 classpath 的 /skills/ 目录提取到临时目录
-        java.net.URL url = SkillLoader.class.getResource("/skills/");
-        if (url == null) {
-            return null;
-        }
-        Path tempDir = Files.createTempDirectory("yucli-skills");
-        // 如果 URL 是 file: 协议（开发时直接从文件系统读取）
+    private static List<Skill> loadBuiltinSkillsFromUrl(URL url) throws IOException, URISyntaxException {
         if ("file".equals(url.getProtocol())) {
-            return Path.of(url.getPath());
+            return loadFromDirectory(Path.of(url.toURI()));
         }
-        // jar 内资源：递归提取
-        // 简化处理：开发/测试时从文件系统读取；打包后需要额外处理
-        return null;
+        if ("jar".equals(url.getProtocol())) {
+            JarURLConnection connection = (JarURLConnection) url.openConnection();
+            String root = connection.getEntryName();
+            if (root == null || root.isBlank()) {
+                root = "skills";
+            }
+            return loadFromJar(connection.getJarFile(), root);
+        }
+        return Collections.emptyList();
+    }
+
+    private static List<Skill> loadBuiltinSkillsFromUrlClassLoader(URLClassLoader classLoader)
+            throws IOException, URISyntaxException {
+        List<Skill> skills = new ArrayList<>();
+        for (URL url : classLoader.getURLs()) {
+            if (!"file".equals(url.getProtocol())) {
+                continue;
+            }
+            Path path = Path.of(url.toURI());
+            if (Files.isRegularFile(path) && path.getFileName().toString().endsWith(".jar")) {
+                try (JarFile jarFile = new JarFile(path.toFile())) {
+                    skills.addAll(loadFromJar(jarFile, "skills"));
+                }
+            } else if (Files.isDirectory(path.resolve("skills"))) {
+                skills.addAll(loadFromDirectory(path.resolve("skills")));
+            }
+        }
+        return skills;
+    }
+
+    private static List<Skill> loadFromJar(JarFile jarFile, String root) throws IOException {
+        String prefix = root.endsWith("/") ? root : root + "/";
+        List<Skill> skills = new ArrayList<>();
+        Enumeration<JarEntry> entries = jarFile.entries();
+        while (entries.hasMoreElements()) {
+            JarEntry entry = entries.nextElement();
+            if (entry.isDirectory() || !entry.getName().startsWith(prefix)) {
+                continue;
+            }
+
+            String relative = entry.getName().substring(prefix.length());
+            int slash = relative.indexOf('/');
+            if (slash <= 0 || !relative.substring(slash + 1).equals("SKILL.md")) {
+                continue;
+            }
+
+            String skillDir = relative.substring(0, slash);
+            try (var input = jarFile.getInputStream(entry)) {
+                String content = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+                Skill skill = parseSkillContent(content, Path.of("skills", skillDir));
+                if (skill != null) {
+                    skills.add(skill);
+                }
+            }
+        }
+        return skills;
     }
 }

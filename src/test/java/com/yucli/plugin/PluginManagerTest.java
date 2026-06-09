@@ -2,11 +2,13 @@ package com.yucli.plugin;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.yucli.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -129,6 +131,34 @@ class PluginManagerTest {
         assertFalse(Files.exists(stateFile));
     }
 
+    @Test
+    void enableAfterDisableRestoresPluginTools() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+        RegisteringPlugin plugin = new RegisteringPlugin();
+        PluginContext context = PluginContext.deferred(registry, tempDir, plugin.name());
+        plugin.onLoad(context);
+        assertFalse(registry.hasTool("plugin__demo__ping"));
+        putPlugin(manager, plugin.name(), new PluginInfo(plugin, PluginState.LOADED, "test.jar", null,
+                context.toolDeclarations()));
+
+        manager.enablePlugin("demo");
+        assertTrue(registry.hasTool("plugin__demo__ping"));
+
+        manager.disablePlugin("demo");
+        assertFalse(registry.hasTool("plugin__demo__ping"));
+
+        manager.enablePlugin("demo");
+        assertTrue(registry.hasTool("plugin__demo__ping"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void putPlugin(PluginManager manager, String name, PluginInfo info) throws Exception {
+        Field field = PluginManager.class.getDeclaredField("plugins");
+        field.setAccessible(true);
+        ((Map<String, PluginInfo>) field.get(manager)).put(name, info);
+    }
+
     static class TestPlugin implements YuPlugin {
         private boolean enabled = false;
         private boolean loaded = false;
@@ -158,5 +188,33 @@ class PluginManagerTest {
         public boolean isEnabled() { return enabled; }
         public boolean isLoaded() { return loaded; }
         public boolean isUnloaded() { return unloaded; }
+    }
+
+    static class RegisteringPlugin implements YuPlugin {
+        @Override
+        public String name() { return "demo"; }
+
+        @Override
+        public String description() { return "demo"; }
+
+        @Override
+        public String version() { return "1.0.0"; }
+
+        @Override
+        public void onLoad(PluginContext context) {
+            var schema = JsonNodeFactory.instance.objectNode();
+            schema.put("type", "object");
+            schema.putObject("properties");
+            context.registerTool("ping", "ping", schema, args -> "pong");
+        }
+
+        @Override
+        public void onEnable() {}
+
+        @Override
+        public void onDisable() {}
+
+        @Override
+        public void onUnload() {}
     }
 }
