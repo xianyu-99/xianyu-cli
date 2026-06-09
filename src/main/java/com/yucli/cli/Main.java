@@ -3,6 +3,7 @@ package com.yucli.cli;
 import com.yucli.agent.Agent;
 import com.yucli.agent.AgentOrchestrator;
 import com.yucli.agent.PlanExecuteAgent;
+import com.yucli.ProductInfo;
 import com.yucli.config.YuCLIConfig;
 import com.yucli.hitl.HitlToolRegistry;
 import com.yucli.hitl.TerminalHitlHandler;
@@ -53,13 +54,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * YuCLI v15.0.0 - MCP-Native Agent CLI
+ * YuCLI - MCP-Native Agent CLI
  * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换、MCP、浏览器自动化、Skill 系统
- * 第 15 期新增：Skill 加载机制、web-access 内置 Skill、Jina Reader fallback、/skill CLI 命令
+ * 包含 Skill 加载机制、web-access 内置 Skill、Jina Reader fallback、/skill CLI 命令
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.yucli.policy
  */
 public class Main {
-    private static final String VERSION = "19.0.0";
+    private static final String VERSION = ProductInfo.VERSION;
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";

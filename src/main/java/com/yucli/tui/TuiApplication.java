@@ -7,6 +7,7 @@ import com.googlecode.lanterna.input.KeyStroke;
 import com.googlecode.lanterna.input.KeyType;
 import com.googlecode.lanterna.screen.Screen;
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
+import com.yucli.ProductInfo;
 import com.yucli.agent.Agent;
 
 import java.io.IOException;
@@ -23,24 +24,27 @@ public class TuiApplication {
 
     private final WindowBasedTextGUI gui;
     private final BasicWindow mainWindow;
+    private final Screen screen;
     private final TuiContext context;
     private final Panel contentPanel;
     private final ChatPanel chatPanel;
     private final CodePanel codePanel;
     private final ConfigPanel configPanel;
+    private boolean closed;
 
     public TuiApplication() throws IOException {
         this(null);
     }
 
     public TuiApplication(Agent agent) throws IOException {
-        DefaultTerminalFactory factory = new DefaultTerminalFactory();
-        factory.setTerminalEmulatorTitle("YuCLI TUI");
-        Screen screen = factory.createScreen();
-        screen.startScreen();
+        this(agent, createDefaultScreen());
+    }
 
+    TuiApplication(Agent agent, Screen screen) throws IOException {
+        this.screen = screen;
+        this.screen.startScreen();
         this.gui = new MultiWindowTextGUI(screen);
-        this.mainWindow = new BasicWindow("YuCLI TUI v16.0.0") {
+        this.mainWindow = new BasicWindow(windowTitle()) {
             @Override
             public boolean handleInput(KeyStroke keyStroke) {
                 if (keyStroke.getKeyType() == KeyType.F1) {
@@ -78,6 +82,12 @@ public class TuiApplication {
         this.contentPanel = new Panel(new BorderLayout());
 
         buildLayout();
+    }
+
+    private static Screen createDefaultScreen() throws IOException {
+        DefaultTerminalFactory factory = new DefaultTerminalFactory();
+        factory.setTerminalEmulatorTitle("YuCLI TUI");
+        return factory.createScreen();
     }
 
     private void buildLayout() {
@@ -174,11 +184,33 @@ public class TuiApplication {
     }
 
     public void run() {
-        gui.waitForWindowToClose(mainWindow);
+        try {
+            gui.waitForWindowToClose(mainWindow);
+        } finally {
+            closeResources();
+        }
     }
 
     public void stop() {
         mainWindow.close();
+        closeResources();
+    }
+
+    public static String windowTitle() {
+        return "YuCLI TUI v" + ProductInfo.VERSION;
+    }
+
+    private synchronized void closeResources() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        chatPanel.shutdown();
+        try {
+            screen.stopScreen();
+        } catch (IOException e) {
+            System.err.println("TUI 关闭失败: " + e.getMessage());
+        }
     }
 
     /**

@@ -56,6 +56,14 @@ public class ChatPanel {
         return panel;
     }
 
+    public void shutdown() {
+        executor.shutdownNow();
+    }
+
+    boolean isShutdown() {
+        return executor.isShutdown();
+    }
+
     /**
      * 刷新历史消息显示。
      */

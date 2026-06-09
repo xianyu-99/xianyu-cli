@@ -47,7 +47,7 @@ public class ToolRegistry {
     // 5MB 对常规代码生成 / 文档撰写完全够用，超过即拒，避免磁盘灌满与误覆盖。
     private static final int MAX_WRITE_FILE_BYTES = 5 * 1024 * 1024;
     // 需要审计的内置工具（与 ApprovalPolicy 的 DANGEROUS_TOOLS 保持一致）；MCP 工具按前缀动态纳入审计。
-    // browser_navigate / browser_click / browser_type 有副作用，纳入审计。
+    // 浏览器导航、交互、脚本执行和会话管理都有副作用，纳入审计。
     private static final Set<String> AUDIT_TOOLS = Set.of(
             "write_file", "execute_command", "create_project",
             "browser_navigate", "browser_click", "browser_type",

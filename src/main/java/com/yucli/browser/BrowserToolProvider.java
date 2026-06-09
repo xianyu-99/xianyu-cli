@@ -7,7 +7,7 @@ import java.util.Map;
  * 浏览器工具提供者。
  *
  * 封装浏览器操控工具，管理 Chrome 进程和 CDP 会话生命周期。
- * 提供 6 个核心工具：navigate、screenshot、click、type、evaluate、get_dom。
+ * 提供浏览器导航、截图、点击、输入、执行脚本、读取 DOM、标签页管理和关闭能力。
  */
 public class BrowserToolProvider {
 

@@ -14,7 +14,7 @@ import java.util.Set;
 public class ApprovalPolicy {
 
     // 需要人工确认的工具集合
-    // browser_navigate / browser_click / browser_type 有副作用（打开外部网页、触发页面交互），纳入审批
+    // 浏览器导航、交互、脚本执行和会话管理都有副作用，纳入审批
     private static final Set<String> DANGEROUS_TOOLS = Set.of(
             "write_file",
             "execute_command",

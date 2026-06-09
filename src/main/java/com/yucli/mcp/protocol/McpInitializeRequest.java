@@ -2,6 +2,7 @@ package com.yucli.mcp.protocol;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yucli.ProductInfo;
 
 public final class McpInitializeRequest {
     public static final String PROTOCOL_VERSION = "2025-03-26";
@@ -17,7 +18,7 @@ public final class McpInitializeRequest {
         capabilities.putObject("sampling");
         ObjectNode clientInfo = root.putObject("clientInfo");
         clientInfo.put("name", "YuCLI");
-        clientInfo.put("version", "19.0.0");
+        clientInfo.put("version", ProductInfo.VERSION);
         return root;
     }
 }
