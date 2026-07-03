@@ -113,7 +113,7 @@ Web 搜索 provider 配置读取顺序（以代码实际行为为准）：
 - `serpapi`：`SERPAPI_KEY`
 - `searxng`：`SEARXNG_URL`（推荐本地 `docker run --rm -p 8888:8888 searxng/searxng`）
 
-Web 抓取（`web_fetch`）安全策略（实现位于 `src/main/java/com/YuCLI/web/NetworkPolicy.java`）：
+Web 抓取（`web_fetch`）安全策略（实现位于 `src/main/java/com/yucli/web/NetworkPolicy.java`）：
 
 - scheme 白名单：仅允许 `http` / `https`
 - 主机黑名单：屏蔽 `localhost`、`0.0.0.0`、loopback / link-local / site-local 地址（基础 SSRF 围栏，不防 DNS rebinding）
@@ -156,10 +156,10 @@ mvn test -Dtest=ExecutionPlanTest
 ### 1. ReAct 模式
 
 - 默认模式
-- 主入口在 `src/main/java/com/YuCLI/agent/Agent.java`
+- 主入口在 `src/main/java/com/yucli/agent/Agent.java`
 - 维护对话历史
 - 退出条件由 LLM 自决：只要它不再返回 `tool_calls`、直接给出 `content`，循环就结束
-- `AgentBudget`（`src/main/java/com/YuCLI/agent/AgentBudget.java`）只承担保险阀职责，三种兜底任一命中即收尾：
+- `AgentBudget`（`src/main/java/com/yucli/agent/AgentBudget.java`）只承担保险阀职责，三种兜底任一命中即收尾：
   - 累计 `inputTokens + outputTokens` 超过 token 预算（默认 300_000）
   - 连续 N 轮（默认 3）出现完全相同的工具名 + 参数，判定为死循环
   - 累计轮数超过硬上限（默认 50），最终防御
@@ -171,7 +171,7 @@ mvn test -Dtest=ExecutionPlanTest
 ### 2. Plan-and-Execute 模式
 
 - 通过 `/plan` 或 `/plan <任务>` 进入
-- 主入口在 `src/main/java/com/YuCLI/agent/PlanExecuteAgent.java`
+- 主入口在 `src/main/java/com/yucli/agent/PlanExecuteAgent.java`
 - 流程是：规划 -> 用户审阅 -> 执行 DAG -> 汇总结果
 - 计划执行完后会回到默认 `ReAct`
 - 简单任务应优先生成最小计划；不要为了凑步数引入无关读写文件或中间落盘步骤
@@ -194,7 +194,7 @@ mvn test -Dtest=ExecutionPlanTest
 
 ### 4. Memory 系统
 
-- 主模块在 `src/main/java/com/YuCLI/memory/`
+- 主模块在 `src/main/java/com/yucli/memory/`
 - 默认包含：短期记忆、长期记忆、摘要压缩、事实提取、Token 预算、相关记忆检索
 - 注入到 system prompt 的“相关记忆”应只来自长期记忆；当前轮用户输入和短期对话已经在消息历史里，不应再被当成“历史记忆”重复注入
 - 长期记忆默认只通过显式命令 `/save <事实>` 写入；不要在每轮对话结束或 `/clear` 时自动提取事实
@@ -207,7 +207,7 @@ mvn test -Dtest=ExecutionPlanTest
 
 ### 5. RAG 系统
 
-- 主模块在 `src/main/java/com/YuCLI/rag/`
+- 主模块在 `src/main/java/com/yucli/rag/`
 - 默认包含：EmbeddingClient、VectorStore（SQLite）、CodeChunker、CodeAnalyzer、CodeIndex、CodeRetriever
 - CLI 命令：
   - `/index [路径]`：索引代码库
@@ -225,14 +225,14 @@ mvn test -Dtest=ExecutionPlanTest
 ### 6. Multi-Agent 协作模式
 
 - 通过 `/team` 或 `/team <任务>` 进入
-- 主入口在 `src/main/java/com/YuCLI/agent/AgentOrchestrator.java`
+- 主入口在 `src/main/java/com/yucli/agent/AgentOrchestrator.java`
 - 采用主从架构：编排器（Orchestrator）为"主"，子代理（SubAgent）为"从"
 - 三个角色：
   - 规划者（Planner）：拆解任务为执行步骤
   - 执行者（Worker）：调用工具执行具体操作（默认 2 个 Worker 轮询分配）
   - 检查者（Reviewer）：审查执行结果质量
 - 协作流程：规划 -> 按依赖顺序分配给 Worker -> Reviewer 审查 -> 通过则完成，未通过则带反馈重试
-- 同一个依赖批次内部当前仍按步骤串行执行（Worker 仅做轮询分担对话历史，没有真正并发），以保证流式输出不交错；Worker 真正并发执行留作后续优化
+- 同一个依赖批次内部 **真正并行执行**（Worker 最多并发数为池大小，默认 2）。每个并发步骤使用独立的 PrintStream 缓冲输出流，在批次结束后按 step_id 顺序统一 flush 到 stdout，既保证了多线程写操作不互相交错乱序，又实现了多 Agent 并发高效干活。
 - 冲突解决：每步最多重试 2 次，超过次数保留当前结果
 - Reviewer 审查结果解析不出来（空内容、缺 approved 字段、既无肯定也无否定关键词）时，采取保守策略判为未通过
 - 如果某步失败导致其依赖步骤无法执行，Orchestrator 会显式提示 `⏭️ 步骤 [step_x] 因前置步骤失败被跳过`
@@ -243,7 +243,7 @@ mvn test -Dtest=ExecutionPlanTest
 
 ### 7. HITL 审批系统
 
-- 主模块在 `src/main/java/com/YuCLI/hitl/`
+- 主模块在 `src/main/java/com/yucli/hitl/`
 - 通过 `/hitl on` 启用、`/hitl off` 关闭，默认关闭
 - 通过 `/hitl` 查看当前状态
 - 危险工具：`write_file`（中危）、`execute_command`（高危）、`create_project`（中危）
@@ -266,7 +266,7 @@ mvn test -Dtest=ExecutionPlanTest
 
 #### 7.1 HITL 增强：路径围栏 / 命令快速拒绝 / 操作审计
 
-HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是沙箱、不提供进程隔离。主模块在 `src/main/java/com/YuCLI/policy/`：
+HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是沙箱、不提供进程隔离。主模块在 `src/main/java/com/yucli/policy/`：
 
 - `PathGuard`：`read_file` / `write_file` / `list_dir` / `create_project` 在执行前必须经过它，强制把路径限定在项目根之内。处理三类越界——绝对路径外逃、`..` 穿越、符号链接逃逸（向上找最近存在祖先做 `Files.toRealPath`，再把剩余段接回）
 - `CommandGuard`：`execute_command` 进入 HITL 之前的 fast-fail 黑名单（sudo / rm -rf 全盘 / mkfs / dd of=/dev / fork bomb / curl|sh / find / / chmod 777 / / shutdown）。**定位是辅助 HITL，不是主防线**——黑名单永远列不全（base64 解码后执行、`eval`、写 `~/.bashrc` 持久化等都漏），它只是减少 HITL 弹窗骚扰。真正的安全责任在 HITL 审批
@@ -282,7 +282,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 ### 8. 异步执行与并行工具调用
 
-- 主入口在 `src/main/java/com/YuCLI/tool/ToolRegistry.java`
+- 主入口在 `src/main/java/com/yucli/tool/ToolRegistry.java`
 - `ToolRegistry.executeTools()` 负责批量执行同一轮 LLM 返回的多个工具调用
 - 批量工具调用内部使用固定上限线程池并行执行，默认最多 4 个工具并发
 - 返回结果保持原始 `tool_call` 顺序，调用方按这个顺序回灌 `tool` 消息，避免破坏 LLM 消息协议
@@ -296,7 +296,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 ### 9. 联网能力（web_search + web_fetch）
 
-- 主模块在 `src/main/java/com/YuCLI/web/`
+- 主模块在 `src/main/java/com/yucli/web/`
 - `SearchProvider` 接口 + 工厂：默认 `ZhipuSearchProvider`（与 GLM 推理共用 Key，国内首选），可切 `SerpApiSearchProvider` 或 `SearxngSearchProvider`，未来加 Brave / Tavily 只需实现接口
 - `web_search` 工具不再返回拼接字符串，而是 provider 返回 `SearchResult` 列表（带 position / title / url / snippet / source），由 ToolRegistry 统一格式化
 - `web_fetch` 工具链路：`NetworkPolicy.checkUrl()` → `acquire()`（限流）→ `WebFetcher.fetch()` → `HtmlExtractor.extract()`，全部本地，无第三方服务依赖
@@ -306,7 +306,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 ### 10. MCP 协议接入
 
-- 主模块在 `src/main/java/com/YuCLI/mcp/`
+- 主模块在 `src/main/java/com/yucli/mcp/`
 - 支持 stdio 子进程 server 与 Streamable HTTP 远程 server
 - `McpConfigLoader` 读取 `~/.YuCLI/mcp.json` 和 `.YuCLI/mcp.json`，项目级按 server 名覆盖用户级
 - `JsonRpcClient` 手写 JSON-RPC 2.0，请求 id 使用 `AtomicLong` 数字自增，请求响应配对用 `ConcurrentHashMap`
@@ -348,13 +348,13 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 - 通过 `/tui` 命令启动，基于 Lanterna 3.1.1 的全屏终端 UI
 - 主入口在 `src/main/java/com/yucli/tui/TuiApplication.java`
-- 布局：顶部菜单栏、左侧文件树、右侧内容区（Tab 切换）、底部状态栏
-- 三个 Tab：
-  - `对话`：`ChatPanel`，消息历史（带颜色区分 user/agent/system）+ 输入框 + 发送按钮
+- 布局：顶部菜单栏、左侧对话区、右侧工作区（文件 / 代码 / 配置 Tab 切换）、底部状态栏
+- 左侧对话区：`ChatPanel`，消息历史（带颜色区分 user/agent/system）+ 输入框 + 发送按钮
+- 右侧三个 Tab：
+  - `文件`：`FileTreePanel`，基于 `ActionListBox`，支持目录进入/返回、Enter 打开文件、文件数上限 50
   - `代码`：`CodePanel`，只读代码查看器，点击文件树中的文件自动加载
   - `配置`：`ConfigPanel`，模型名/模式名切换、清空历史、打开 .env 文件
-- 文件树：`FileTreePanel`，基于 `ActionListBox`，支持目录进入/返回、Enter 打开文件、文件数上限 50
-- Tab 切换通过顶部按钮或菜单栏按钮触发，自定义面板替换实现（Lanterna 3.1.1 无原生 TabbedPanel）
+- Tab 切换通过顶部按钮、菜单栏按钮或 F1/F2/F3 触发，自定义面板替换实现（Lanterna 3.1.1 无原生 TabbedPanel）
 - 状态栏显示当前模型、当前模式、快捷键提示
 - TUI 共享状态通过 `TuiContext` 事件总线：`onTabSwitch`、`onAction`、`fireTabSwitch`、`fireAction`
 - 退出 TUI 后自动回到 CLI 模式，对话历史等状态在 `TuiContext` 中维护
@@ -537,12 +537,15 @@ src/main/java/com/yucli
 - `TokenStoreTest`、`McpOAuthClientTest`
 - `PluginManagerTest`
 - `SessionManagerTest`
+- `BrowserToolProviderTest`
+- `TuiApplicationTest`
+- `EvalHarnessTest`
 
 这意味着当前自动化测试更偏解析、计划结构、RAG 核心模块、Multi-Agent 编排逻辑、HITL 审批策略、策略层拦截规则、MCP 协议核心组件和 MCP resources 输入层，不覆盖真实 LLM 联调、真实 Embedding API 联调、真实 npm/uvx MCP server 联调，也不覆盖终端交互的完整手工体验。
 
 ## 核心文件说明
 
-### `src/main/java/com/YuCLI/cli/Main.java`
+### `src/main/java/com/yucli/cli/Main.java`
 
 - CLI 入口
 - Banner 输出
@@ -551,13 +554,13 @@ src/main/java/com/yucli
 - ReAct 与 Plan 模式切换
 - JLine 单键交互、raw mode、bracketed paste 处理
 
-### `src/main/java/com/YuCLI/agent/Agent.java`
+### `src/main/java/com/yucli/agent/Agent.java`
 
 - ReAct 主循环
 - 对话历史维护
 - 工具调用执行与结果回灌
 
-### `src/main/java/com/YuCLI/agent/PlanExecuteAgent.java`
+### `src/main/java/com/yucli/agent/PlanExecuteAgent.java`
 
 - 规划后执行主流程
 - 计划审阅
@@ -565,7 +568,7 @@ src/main/java/com/yucli
 - 并行批次执行
 - 失败后重规划
 
-### `src/main/java/com/YuCLI/agent/AgentOrchestrator.java`
+### `src/main/java/com/yucli/agent/AgentOrchestrator.java`
 
 - Multi-Agent 编排器（主从架构中的"主"）
 - 管理规划者、执行者、检查者三个角色
@@ -574,7 +577,7 @@ src/main/java/com/yucli
 - 解析规划者输出的 JSON 执行计划
 - 解析检查者输出的审批结果
 
-### `src/main/java/com/YuCLI/agent/SubAgent.java`
+### `src/main/java/com/yucli/agent/SubAgent.java`
 
 - 可配置角色的轻量子代理
 - 三个角色对应三套系统提示词（规划者/执行者/检查者）
@@ -582,17 +585,17 @@ src/main/java/com/yucli
 - 执行者可使用工具调用，规划者和检查者不使用工具
 - 支持流式输出（按角色显示不同标签）
 
-### `src/main/java/com/YuCLI/agent/AgentRole.java`
+### `src/main/java/com/yucli/agent/AgentRole.java`
 
 - Agent 角色枚举：PLANNER、WORKER、REVIEWER
 - 每个角色有显示名和描述
 
-### `src/main/java/com/YuCLI/agent/AgentMessage.java`
+### `src/main/java/com/yucli/agent/AgentMessage.java`
 
 - Agent 间通信消息类型
 - 五种消息类型：TASK、RESULT、FEEDBACK、APPROVAL、REJECTION
 
-### `src/main/java/com/YuCLI/plan/Planner.java`
+### `src/main/java/com/yucli/plan/Planner.java`
 
 - 调用 LLM 生成计划 JSON
 - 对明显简单的任务走最小计划快捷路径，避免过度规划
@@ -600,13 +603,13 @@ src/main/java/com/yucli
 - 重新编号为 `task_1`、`task_2`...
 - 计算依赖关系和执行顺序
 
-### `src/main/java/com/YuCLI/plan/ExecutionPlan.java`
+### `src/main/java/com/yucli/plan/ExecutionPlan.java`
 
 - DAG 拓扑排序
 - 可执行任务判定
 - 进度、状态、可视化与摘要
 
-### `src/main/java/com/YuCLI/tool/ToolRegistry.java`
+### `src/main/java/com/yucli/tool/ToolRegistry.java`
 
 当前内置工具有 16 个：
 
@@ -639,7 +642,7 @@ src/main/java/com/yucli
 - `ToolExecutionResult`：封装工具结果、耗时与是否超时
 - `executeTools(List<ToolInvocation>)`：并行执行同一批工具调用，并按输入顺序返回结果
 
-### `src/main/java/com/YuCLI/mcp/`
+### `src/main/java/com/yucli/mcp/`
 
 - `McpServerManager.java`：读取配置、并行启动 server、注册/移除 MCP 工具、处理 `/mcp` 系列命令
 - `McpClient.java`：封装 `initialize`、`tools/list`、`tools/call`
@@ -651,7 +654,7 @@ src/main/java/com/yucli
 - `mention/`：解析 `@server:protocol://path`、JLine 候选补全、提交前展开 `<resource>` 块
 - `notifications/NotificationRouter.java`：被动路由 MCP notification，当前处理工具列表变化和 resource cache 失效
 
-### `src/main/java/com/YuCLI/llm/GLMClient.java`
+### `src/main/java/com/yucli/llm/GLMClient.java`
 
 - 当前固定模型：`glm-5.1`
 - 当前固定接口：`https://open.bigmodel.cn/api/coding/paas/v4/chat/completions`
@@ -752,7 +755,7 @@ src/main/java/com/yucli
 
 如果新增 SearchProvider 实现，或调整 NetworkPolicy / WebFetcher 行为：
 
-- `src/main/java/com/YuCLI/web/` 下相关文件
+- `src/main/java/com/yucli/web/` 下相关文件
 - `ToolRegistry.java` 的 `webSearch` / `webFetch` 实现
 - `SearchProviderFactory.pickProvider` 的环境变量优先级
 - `.env.example`：补充新的环境变量示例
@@ -772,7 +775,7 @@ src/main/java/com/yucli
 
 如果新增黑名单规则、调整 PathGuard 行为、改 AuditLog 字段、或加新的资源上限：
 
-- `src/main/java/com/YuCLI/policy/` 下相关文件
+- `src/main/java/com/yucli/policy/` 下相关文件
 - `ToolRegistry.java`：执行入口与拦截路径
 - `HitlToolRegistry.java`：HITL 审批与策略层审计的协同
 - `Agent.java` / `PlanExecuteAgent.java` / `SubAgent.java` 的系统提示词：让 LLM 知道新增规则与 `🛡️ 策略拒绝` 输出格式
@@ -785,7 +788,7 @@ src/main/java/com/yucli
 
 如果新增 MCP transport、调整配置格式、改变工具命名、改 `tools/list` / `tools/call` / `resources/list` / `resources/read` 行为、调整 `@server:protocol://path` 输入层、或新增 `/mcp` 子命令：
 
-- `src/main/java/com/YuCLI/mcp/` 下相关文件
+- `src/main/java/com/yucli/mcp/` 下相关文件
 - `ToolRegistry.java`：MCP 工具注册、卸载、执行路由、审计判断
 - `ApprovalPolicy.java` / `ApprovalRequest.java` / `HitlToolRegistry.java`：MCP 默认审批和展示信息
 - `AuditLog.java`：确保 args 脱敏仍覆盖 token / key / password / authorization / Bearer

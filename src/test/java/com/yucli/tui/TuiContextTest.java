@@ -19,6 +19,7 @@ class TuiContextTest {
         assertNull(ctx.getSelectedFile());
         assertTrue(ctx.getChatHistory().isEmpty());
         assertEquals(0, ctx.getActiveTabIndex());
+        assertEquals(TuiContext.TAB_FILE_TREE, ctx.getActiveTabName());
     }
 
     @Test
@@ -60,13 +61,29 @@ class TuiContextTest {
         List<String> fired = new ArrayList<>();
         ctx.onTabSwitch(fired::add);
 
-        ctx.fireTabSwitch("code");
+        ctx.fireTabSwitch(TuiContext.TAB_CODE);
         assertEquals(1, fired.size());
-        assertEquals("code", fired.get(0));
+        assertEquals(TuiContext.TAB_CODE, fired.get(0));
         assertEquals(1, ctx.getActiveTabIndex());
 
-        ctx.fireTabSwitch("config");
+        ctx.fireTabSwitch(TuiContext.TAB_CONFIG);
         assertEquals(2, ctx.getActiveTabIndex());
+    }
+
+    @Test
+    void activeTabNameTracksRightPaneTabs() {
+        TuiContext ctx = new TuiContext();
+
+        assertEquals(TuiContext.TAB_FILE_TREE, ctx.getActiveTabName());
+
+        ctx.fireTabSwitch(TuiContext.TAB_CODE);
+        assertEquals(TuiContext.TAB_CODE, ctx.getActiveTabName());
+
+        ctx.fireTabSwitch(TuiContext.TAB_CONFIG);
+        assertEquals(TuiContext.TAB_CONFIG, ctx.getActiveTabName());
+
+        ctx.fireTabSwitch(TuiContext.TAB_FILE_TREE);
+        assertEquals(TuiContext.TAB_FILE_TREE, ctx.getActiveTabName());
     }
 
     @Test
@@ -88,7 +105,7 @@ class TuiContextTest {
         ctx.onTabSwitch(first::add);
         ctx.onTabSwitch(second::add);
 
-        ctx.fireTabSwitch("chat");
+        ctx.fireTabSwitch(TuiContext.TAB_FILE_TREE);
         assertEquals(1, first.size());
         assertEquals(1, second.size());
     }

@@ -9,7 +9,7 @@ import java.util.*;
 import java.util.stream.Stream;
 
 /**
- * 左侧文件树面板：浏览项目文件结构，点击文件可发送给 Agent。
+ * 右侧文件 Tab：浏览项目文件结构，打开文件后切到代码 Tab。
  */
 public class FileTreePanel {
 
@@ -34,13 +34,25 @@ public class FileTreePanel {
         panel.addComponent(header, BorderLayout.Location.TOP);
 
         // 文件列表
-        this.fileList = new ActionListBox(new TerminalSize(28, 20));
+        this.fileList = new ActionListBox(new TerminalSize(28, 20)) {
+            @Override
+            public Result handleKeyStroke(com.googlecode.lanterna.input.KeyStroke keyStroke) {
+                if (keyStroke.getKeyType() == com.googlecode.lanterna.input.KeyType.Tab) {
+                    if (keyStroke.isShiftDown()) {
+                        return super.handleKeyStroke(new com.googlecode.lanterna.input.KeyStroke(com.googlecode.lanterna.input.KeyType.ArrowUp));
+                    } else {
+                        return super.handleKeyStroke(new com.googlecode.lanterna.input.KeyStroke(com.googlecode.lanterna.input.KeyType.ArrowDown));
+                    }
+                }
+                return super.handleKeyStroke(keyStroke);
+            }
+        };
         this.fileList.setLayoutData(LinearLayout.createLayoutData(LinearLayout.Alignment.Fill));
         panel.addComponent(fileList, BorderLayout.Location.CENTER);
 
         // 底部提示
         Panel footer = new Panel(new LinearLayout(Direction.HORIZONTAL));
-        footer.addComponent(new Label("Enter打开"));
+        footer.addComponent(new Label("Enter 打开并切到代码"));
         panel.addComponent(footer, BorderLayout.Location.BOTTOM);
 
         refresh();
@@ -48,6 +60,10 @@ public class FileTreePanel {
 
     public Component getComponent() {
         return panel;
+    }
+
+    public void takeFocus() {
+        fileList.takeFocus();
     }
 
     private void refresh() {

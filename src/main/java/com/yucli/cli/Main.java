@@ -27,6 +27,7 @@ import com.yucli.runtime.CancellationToken;
 import com.yucli.session.Session;
 import com.yucli.session.SessionManager;
 import com.yucli.tui.TuiApplication;
+import com.yucli.util.AnsiStyle;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.terminal.Attributes;
@@ -61,6 +62,10 @@ import java.util.concurrent.TimeUnit;
  */
 public class Main {
     private static final String VERSION = ProductInfo.VERSION;
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_BANNER_CYAN = "\u001B[1;96m";
+    private static final String ANSI_READY_GREEN = "\u001B[32m";
+    private static final String ANSI_DIM = "\u001B[2m";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";
@@ -1315,11 +1320,34 @@ public class Main {
     }
 
     private static void printBanner() {
-        System.out.println("+----------------------------------------------------------+");
-        System.out.println("| YuCLI                                                    |");
-        System.out.printf("| MCP-Native Agent CLI %-35s|%n", "v" + VERSION);
-        System.out.println("+----------------------------------------------------------+");
+        System.out.println(styleDim("YuCLI  v" + VERSION + "  session=local  ") + styleReady("ready"));
+        System.out.println(styleBanner("██╗   ██╗██╗   ██╗ ██████╗██╗     ██╗"));
+        System.out.println(styleBanner("╚██╗ ██╔╝██║   ██║██╔════╝██║     ██║"));
+        System.out.println(styleBanner(" ╚████╔╝ ██║   ██║██║     ██║     ██║"));
+        System.out.println(styleBanner("  ╚██╔╝  ██║   ██║██║     ██║     ██║"));
+        System.out.println(styleBanner("   ██║   ╚██████╔╝╚██████╗███████╗██║"));
+        System.out.println(styleBanner("   ╚═╝    ╚═════╝  ╚═════╝╚══════╝╚═╝"));
+        System.out.println(styleDim("输入消息开始对话   ·   /help 查看命令   ·   /exit 退出"));
         System.out.println();
+    }
+
+    private static String styleBanner(String text) {
+        return wrapAnsi(ANSI_BANNER_CYAN, text);
+    }
+
+    private static String styleReady(String text) {
+        return wrapAnsi(ANSI_READY_GREEN, text);
+    }
+
+    private static String styleDim(String text) {
+        return wrapAnsi(ANSI_DIM, text);
+    }
+
+    private static String wrapAnsi(String style, String text) {
+        if (!AnsiStyle.isEnabled() || text == null || text.isEmpty()) {
+            return text;
+        }
+        return style + text + ANSI_RESET;
     }
 
     static Path userSkillsDir() {

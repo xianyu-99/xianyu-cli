@@ -11,6 +11,9 @@ import java.util.Map;
  */
 public class BrowserToolProvider {
 
+    private static final int DEFAULT_DOM_SUMMARY_MAX_LENGTH = 8000;
+    private static final int MAX_DOM_SUMMARY_MAX_LENGTH = 20000;
+
     private final ChromeLauncher launcher;
     private ChromeDiscovery discovery;
     private CdpWebSocketClient wsClient;
@@ -60,7 +63,17 @@ public class BrowserToolProvider {
             wsClient = null;
         }
         session = null;
-        launcher.kill();
+        if (launcher != null) {
+            launcher.kill();
+        }
+    }
+
+    // Visible for testing
+    void setSession(CdpSession session) {
+        this.session = session;
+        if (session != null) {
+            this.wsClient = session.getClient();
+        }
     }
 
     // ---- 工具实现 ----
@@ -80,7 +93,7 @@ public class BrowserToolProvider {
             s.navigate(url, waitForLoad);
 
             String currentUrl = s.getCurrentUrl();
-            return "✅ 已导航到: " + currentUrl;
+            return withDomSummary("✅ 已导航到: " + currentUrl, s, args);
         } catch (Exception e) {
             return "❌ 导航失败: " + e.getMessage();
         }
@@ -122,7 +135,7 @@ public class BrowserToolProvider {
 
             CdpSession s = ensureSession();
             s.click(selector);
-            return "✅ 已点击元素: " + selector;
+            return withDomSummary("✅ 已点击元素: " + selector, s, args);
         } catch (Exception e) {
             return "❌ 点击失败: " + e.getMessage();
         }
@@ -145,7 +158,7 @@ public class BrowserToolProvider {
 
             CdpSession s = ensureSession();
             s.type(selector, text, submit);
-            return "✅ 已在 " + selector + " 中输入文本" + (submit ? " 并提交" : "");
+            return withDomSummary("✅ 已在 " + selector + " 中输入文本" + (submit ? " 并提交" : ""), s, args);
         } catch (Exception e) {
             return "❌ 输入失败: " + e.getMessage();
         }
@@ -278,6 +291,35 @@ public class BrowserToolProvider {
             return sb.toString().trim();
         } catch (Exception e) {
             return "浏览器已连接，但获取状态失败: " + e.getMessage();
+        }
+    }
+
+    private String withDomSummary(String successMessage, CdpSession session, Map<String, String> args) {
+        if (!shouldIncludeDomSummary(args)) {
+            return successMessage;
+        }
+        try {
+            return successMessage + "\n\nDOM 摘要:\n" + session.getCleanDom(parseDomSummaryMaxLength(args));
+        } catch (Exception e) {
+            return successMessage + "\n\nDOM 摘要获取失败: " + e.getMessage();
+        }
+    }
+
+    private boolean shouldIncludeDomSummary(Map<String, String> args) {
+        String value = args.getOrDefault("include_dom_summary", args.getOrDefault("dom_summary", "true")).trim();
+        return !("false".equalsIgnoreCase(value) || "0".equals(value) || "no".equalsIgnoreCase(value));
+    }
+
+    private int parseDomSummaryMaxLength(Map<String, String> args) {
+        String value = args.get("dom_summary_max_length");
+        if (value == null || value.isBlank()) {
+            return DEFAULT_DOM_SUMMARY_MAX_LENGTH;
+        }
+        try {
+            int maxLength = Integer.parseInt(value.trim());
+            return Math.max(0, Math.min(maxLength, MAX_DOM_SUMMARY_MAX_LENGTH));
+        } catch (NumberFormatException e) {
+            return DEFAULT_DOM_SUMMARY_MAX_LENGTH;
         }
     }
 }

@@ -8,7 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * 配置面板：管理 YuCLI 运行时配置与模型切换。
+ * 右侧配置 Tab：管理 YuCLI 运行时配置与模型切换。
  */
 public class ConfigPanel {
 
@@ -44,7 +44,7 @@ public class ConfigPanel {
         panel.addComponent(new EmptySpace(new TerminalSize(1, 1)));
 
         // 状态显示
-        this.statusLabel = new Label("状态: 就绪");
+        this.statusLabel = new Label("状态: 配置就绪");
         statusLabel.setForegroundColor(TextColor.ANSI.GREEN);
         panel.addComponent(statusLabel);
         panel.addComponent(new EmptySpace(new TerminalSize(1, 1)));
@@ -62,6 +62,10 @@ public class ConfigPanel {
 
     public Component getComponent() {
         return panel;
+    }
+
+    public void takeFocus() {
+        modelInput.takeFocus();
     }
 
     private void switchModel() {
@@ -90,7 +94,7 @@ public class ConfigPanel {
         if (Files.exists(envPath)) {
             context.setSelectedFile(envPath);
             context.fireAction("open_file:" + envPath.toAbsolutePath());
-            setStatus("已打开: " + envPath);
+            setStatus("已打开并切到代码: " + envPath);
         } else {
             setStatus("未找到 .env 文件");
         }

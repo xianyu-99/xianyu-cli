@@ -1,5 +1,6 @@
 package com.yucli.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -11,6 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolRegistryTest {
@@ -163,7 +165,28 @@ class ToolRegistryTest {
         assertEquals("result-fast", results.get(1).result());
     }
 
+    @Test
+    void browserInteractionToolsExposeDomSummaryControls() {
+        ToolRegistry registry = new ToolRegistry();
+
+        assertDomSummaryControls(registry, "browser_navigate");
+        assertDomSummaryControls(registry, "browser_click");
+        assertDomSummaryControls(registry, "browser_type");
+    }
+
     private static boolean isWindows() {
         return System.getProperty("os.name").toLowerCase().contains("win");
+    }
+
+    private static void assertDomSummaryControls(ToolRegistry registry, String toolName) {
+        JsonNode properties = registry.getToolDefinitions().stream()
+                .filter(tool -> tool.name().equals(toolName))
+                .findFirst()
+                .orElseThrow()
+                .parameters()
+                .path("properties");
+
+        assertNotNull(properties.get("include_dom_summary"), toolName + " 应声明 include_dom_summary");
+        assertNotNull(properties.get("dom_summary_max_length"), toolName + " 应声明 dom_summary_max_length");
     }
 }

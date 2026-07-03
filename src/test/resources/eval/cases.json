@@ -1,0 +1,14 @@
+[
+  {
+    "id": "file-write-1",
+    "instruction": "Create a file named hello.txt containing the text 'Hello, World!' in the current directory.",
+    "setupScript": "",
+    "verifyScript": "$content = Get-Content 'hello.txt' -ErrorAction SilentlyContinue; if ($content -match 'Hello, World!') { exit 0 } else { exit 1 }"
+  },
+  {
+    "id": "shell-exec-1",
+    "instruction": "Create a directory named 'test_dir'.",
+    "setupScript": "",
+    "verifyScript": "if (Test-Path 'test_dir') { exit 0 } else { exit 1 }"
+  }
+]

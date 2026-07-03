@@ -318,7 +318,9 @@ public class ToolRegistry {
                         "静态页面优先使用 web_fetch，需要点击/输入/截图时使用浏览器工具。",
                 createParameters(
                         new Param("url", "string", "目标 URL，例如 https://example.com", true),
-                        new Param("wait_for_load", "boolean", "是否等待页面加载完成（默认 true）", false)
+                        new Param("wait_for_load", "boolean", "是否等待页面加载完成（默认 true）", false),
+                        new Param("include_dom_summary", "boolean", "成功后是否附带清洗后的 DOM 摘要（默认 true，大页面可设为 false）", false),
+                        new Param("dom_summary_max_length", "integer", "DOM 摘要最大字符数（默认 8000，最大 20000）", false)
                 ),
                 args -> browserToolProvider.navigate(args)
         ));
@@ -337,7 +339,9 @@ public class ToolRegistry {
                 "browser_click",
                 "点击页面上匹配 CSS 选择器的元素。",
                 createParameters(
-                        new Param("selector", "string", "CSS 选择器，例如 #submit-button、.nav-item", true)
+                        new Param("selector", "string", "CSS 选择器，例如 #submit-button、.nav-item", true),
+                        new Param("include_dom_summary", "boolean", "成功后是否附带清洗后的 DOM 摘要（默认 true，大页面可设为 false）", false),
+                        new Param("dom_summary_max_length", "integer", "DOM 摘要最大字符数（默认 8000，最大 20000）", false)
                 ),
                 args -> browserToolProvider.click(args)
         ));
@@ -348,7 +352,9 @@ public class ToolRegistry {
                 createParameters(
                         new Param("selector", "string", "输入框的 CSS 选择器", true),
                         new Param("text", "string", "要输入的文本", true),
-                        new Param("submit", "boolean", "输入后是否按回车提交（默认 false）", false)
+                        new Param("submit", "boolean", "输入后是否按回车提交（默认 false）", false),
+                        new Param("include_dom_summary", "boolean", "成功后是否附带清洗后的 DOM 摘要（默认 true，大页面可设为 false）", false),
+                        new Param("dom_summary_max_length", "integer", "DOM 摘要最大字符数（默认 8000，最大 20000）", false)
                 ),
                 args -> browserToolProvider.type(args)
         ));

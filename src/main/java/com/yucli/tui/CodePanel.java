@@ -11,7 +11,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 代码面板：展示文件内容，支持基础语法高亮。
+ * 右侧代码 Tab：展示文件内容，支持基础语法高亮。
  *
  * Lanterna 3.1.1 的 TextBox 不支持富文本/逐字符着色，
  * 因此改用 Panel + 每行一个 Label 的方式实现。
@@ -73,7 +73,7 @@ public class CodePanel {
         this.infoLabel = new Label("");
         panel.addComponent(infoLabel, BorderLayout.Location.BOTTOM);
 
-        // 监听上下文文件变化
+        // 监听打开文件事件，实际 Tab 切换由 TuiApplication 统一处理。
         context.onAction(action -> {
             if (action.startsWith("open_file:")) {
                 String path = action.substring("open_file:".length());
@@ -84,6 +84,10 @@ public class CodePanel {
 
     public Component getComponent() {
         return panel;
+    }
+
+    public void takeFocus() {
+        // 代码面板当前没有可交互控件，切到该 Tab 时只展示内容。
     }
 
     /**
@@ -98,6 +102,7 @@ public class CodePanel {
         }
 
         try {
+            context.setSelectedFile(file);
             String content = Files.readString(file);
             String fileName = file.getFileName().toString();
             fileLabel.setText(fileName + " (" + file.toAbsolutePath() + ")");
