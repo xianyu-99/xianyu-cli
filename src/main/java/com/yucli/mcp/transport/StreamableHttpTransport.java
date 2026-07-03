@@ -62,9 +62,7 @@ public class StreamableHttpTransport implements McpTransport {
         if (sessionId != null && !sessionId.isBlank()) {
             builder.header("Mcp-Session-Id", sessionId);
         }
-        if (tokenProvider != null && tokenProvider.isTokenValid()) {
-            builder.header("Authorization", "Bearer " + tokenProvider.getAccessToken());
-        }
+        addOAuthAuthorizationHeader(builder);
 
         try (Response response = client.newCall(builder.build()).execute()) {
             if (response.code() == 401 && !retried && tokenProvider != null) {
@@ -125,6 +123,7 @@ public class StreamableHttpTransport implements McpTransport {
                 .header("Mcp-Session-Id", sessionId)
                 .delete();
         headers.forEach(builder::header);
+        addOAuthAuthorizationHeader(builder);
         // close 是 best-effort：server 已经关停 / 网络不通时不应该让 YuCLI 退出卡住。
         // 主 client 的 callTimeout 是 60s，这里用 5s 短超时单独发请求。
         OkHttpClient closeClient = client.newBuilder()
@@ -135,6 +134,13 @@ public class StreamableHttpTransport implements McpTransport {
         try (Response ignored = closeClient.newCall(builder.build()).execute()) {
             // best effort
         } catch (IOException ignored) {
+        }
+    }
+
+    private void addOAuthAuthorizationHeader(Request.Builder builder) {
+        TokenProvider provider = tokenProvider;
+        if (provider != null && provider.isTokenValid()) {
+            builder.header("Authorization", "Bearer " + provider.getAccessToken());
         }
     }
 

@@ -31,4 +31,12 @@ class InstallScriptTest {
         assertTrue(script.contains("Set-Content -Path \"$INSTALL_DIR\\$SCRIPT_NAME\" -Value $cmdContent -Encoding OEM"),
                 "PowerShell 5 Set-Content defaults to UTF-16LE; .cmd wrappers should be written with a cmd-compatible encoding");
     }
+
+    @Test
+    void jpackageProfilesUseMavenProjectVersion() throws Exception {
+        String pom = Files.readString(Path.of("pom.xml"));
+
+        assertTrue(pom.contains("<argument>--app-version</argument>\n                                        <argument>${project.version}</argument>"),
+                "Native installers should use the Maven project version instead of a stale literal version");
+    }
 }

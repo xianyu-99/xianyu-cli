@@ -7,7 +7,9 @@ import com.googlecode.lanterna.terminal.virtual.DefaultVirtualTerminal;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -121,5 +123,17 @@ class TuiApplicationTest {
         } finally {
             app.stop();
         }
+    }
+
+    @Test
+    void launchFailureReturnsToCallerInsteadOfExitingProcess() {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        boolean launched = TuiApplication.launch(null,
+                ignored -> { throw new IOException("screen unavailable"); },
+                new PrintStream(err));
+
+        assertFalse(launched);
+        assertTrue(err.toString().contains("TUI 启动失败: screen unavailable"));
     }
 }

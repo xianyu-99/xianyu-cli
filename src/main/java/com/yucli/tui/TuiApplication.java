@@ -10,6 +10,7 @@ import com.yucli.ProductInfo;
 import com.yucli.agent.Agent;
 
 import java.io.IOException;
+import java.io.PrintStream;
 
 /**
  * YuCLI TUI 应用入口。
@@ -320,12 +321,22 @@ public class TuiApplication {
      * 启动 TUI 模式，传入已初始化的 Agent。
      */
     public static void launch(Agent agent) {
+        launch(agent, TuiApplication::new, System.err);
+    }
+
+    static boolean launch(Agent agent, ApplicationFactory factory, PrintStream err) {
         try {
-            TuiApplication app = new TuiApplication(agent);
+            TuiApplication app = factory.create(agent);
             app.run();
+            return true;
         } catch (IOException e) {
-            System.err.println("TUI 启动失败: " + e.getMessage());
-            System.exit(1);
+            err.println("TUI 启动失败: " + e.getMessage());
+            return false;
         }
+    }
+
+    @FunctionalInterface
+    interface ApplicationFactory {
+        TuiApplication create(Agent agent) throws IOException;
     }
 }

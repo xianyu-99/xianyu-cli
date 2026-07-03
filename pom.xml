@@ -197,7 +197,7 @@
                                         <argument>--name</argument>
                                         <argument>YuCLI</argument>
                                         <argument>--app-version</argument>
-                                        <argument>1.0</argument>
+                                        <argument>${project.version}</argument>
                                         <argument>--vendor</argument>
                                         <argument>YuCLI Team</argument>
                                         <argument>--description</argument>
@@ -248,7 +248,7 @@
                                         <argument>--name</argument>
                                         <argument>YuCLI</argument>
                                         <argument>--app-version</argument>
-                                        <argument>1.0</argument>
+                                        <argument>${project.version}</argument>
                                         <argument>--vendor</argument>
                                         <argument>YuCLI Team</argument>
                                         <argument>--description</argument>

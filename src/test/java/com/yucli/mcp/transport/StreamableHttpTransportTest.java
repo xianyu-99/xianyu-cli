@@ -2,6 +2,7 @@ package com.yucli.mcp.transport;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yucli.mcp.auth.TokenProvider;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -186,6 +187,43 @@ class StreamableHttpTransportTest {
         assertNotNull(deleteRequest, "close 应触发 DELETE 请求");
         assertEquals("DELETE", deleteRequest.getMethod());
         assertEquals("session-xyz", deleteRequest.getHeader("Mcp-Session-Id"));
+    }
+
+    @Test
+    void closeIssuesDeleteWithOAuthAuthorizationHeader() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setHeader("Mcp-Session-Id", "session-oauth")
+                .setBody("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}"));
+        server.enqueue(new MockResponse().setResponseCode(200));
+
+        StreamableHttpTransport transport = new StreamableHttpTransport(
+                server.url("/mcp").toString(), Map.of());
+        transport.setTokenProvider(new TokenProvider() {
+            @Override
+            public String getAccessToken() {
+                return "close-token";
+            }
+
+            @Override
+            public boolean isTokenValid() {
+                return true;
+            }
+
+            @Override
+            public void refreshToken() {
+            }
+        });
+
+        transport.send(MAPPER.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"a\"}"));
+        transport.close();
+
+        server.takeRequest(); // 跳过 POST
+        RecordedRequest deleteRequest = server.takeRequest(2, TimeUnit.SECONDS);
+        assertNotNull(deleteRequest, "close 应触发 DELETE 请求");
+        assertEquals("DELETE", deleteRequest.getMethod());
+        assertEquals("session-oauth", deleteRequest.getHeader("Mcp-Session-Id"));
+        assertEquals("Bearer close-token", deleteRequest.getHeader("Authorization"));
     }
 
     @Test
