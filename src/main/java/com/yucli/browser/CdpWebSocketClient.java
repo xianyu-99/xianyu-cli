@@ -33,6 +33,7 @@ public class CdpWebSocketClient {
     private final AtomicLong requestId = new AtomicLong(1);
     private final ConcurrentHashMap<Long, CompletableFuture<JsonNode>> pendingRequests = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Consumer<JsonNode>> eventListeners = new ConcurrentHashMap<>();
+    private final StringBuilder textFrameBuffer = new StringBuilder();
     private volatile boolean connected = false;
 
     public CdpWebSocketClient() {
@@ -53,7 +54,7 @@ public class CdpWebSocketClient {
 
                     @Override
                     public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
-                        handleMessage(data.toString());
+                        handleTextFrame(data, last);
                         return WebSocket.Listener.super.onText(ws, data, last);
                     }
 
@@ -142,6 +143,20 @@ public class CdpWebSocketClient {
 
     public boolean isConnected() {
         return connected;
+    }
+
+    void handleTextFrame(CharSequence data, boolean last) {
+        String message = null;
+        synchronized (textFrameBuffer) {
+            textFrameBuffer.append(data);
+            if (last) {
+                message = textFrameBuffer.toString();
+                textFrameBuffer.setLength(0);
+            }
+        }
+        if (message != null) {
+            handleMessage(message);
+        }
     }
 
     private void handleMessage(String text) {

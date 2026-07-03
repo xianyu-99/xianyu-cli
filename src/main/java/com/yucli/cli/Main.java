@@ -133,7 +133,7 @@ public class Main {
         LlmClient llmClient = LlmClientFactory.createFromConfig(config);
         if (llmClient == null) {
             System.err.println("❌ 错误: 未找到可用的 API Key");
-            System.err.println("请在 .env 文件中添加 GLM_API_KEY 或 DEEPSEEK_API_KEY");
+            System.err.println("请在 .env 文件中添加 ANTHROPIC_API_KEY、GLM_API_KEY 或 DEEPSEEK_API_KEY");
             System.exit(1);
         }
 
@@ -236,8 +236,9 @@ public class Main {
                     }
                     case TUI_LAUNCH -> {
                         System.out.println("🖥️ 启动 TUI 模式...\n");
-                        TuiApplication.launch(reactAgent);
-                        System.out.println("👤 已退出 TUI，回到 CLI 模式。\n");
+                        if (TuiApplication.launch(reactAgent)) {
+                            System.out.println("👤 已退出 TUI，回到 CLI 模式。\n");
+                        }
                         continue;
                     }
                     case EXIT -> {

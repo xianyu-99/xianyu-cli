@@ -81,7 +81,10 @@ public class CdpSession {
         params.put("format", "png");
         params.put("fromSurface", true);
 
-        if (fullPage) {
+        if (selector != null && !selector.isBlank()) {
+            params.set("clip", getElementClip(selector));
+            params.put("captureBeyondViewport", true);
+        } else if (fullPage) {
             // 获取完整页面尺寸
             JsonNode metrics = client.sendSync("Page.getLayoutMetrics", null);
             JsonNode contentSize = metrics.path("contentSize");
@@ -90,11 +93,6 @@ public class CdpSession {
                     .put("width", contentSize.path("width").asDouble(1920))
                     .put("height", contentSize.path("height").asDouble(1080))
                     .put("scale", 1));
-        }
-
-        if (selector != null && !selector.isBlank()) {
-            // 先滚动到元素位置
-            scrollIntoView(selector);
         }
 
         JsonNode result = client.sendSync("Page.captureScreenshot", params);
@@ -333,14 +331,44 @@ public class CdpSession {
 
     // ---- Helper methods ----
 
-    private void scrollIntoView(String selector) throws Exception {
+    private ObjectNode getElementClip(String selector) throws Exception {
         String script = String.format(
-            "document.querySelector('%s').scrollIntoView({behavior: 'instant', block: 'center'})",
+            "(function() { " +
+            "  var el = document.querySelector('%s'); " +
+            "  if (!el) return null; " +
+            "  el.scrollIntoView({behavior: 'instant', block: 'center', inline: 'center'}); " +
+            "  var rect = el.getBoundingClientRect(); " +
+            "  if (!rect || rect.width <= 0 || rect.height <= 0) return {empty: true}; " +
+            "  return { " +
+            "    x: Math.max(0, rect.left + window.scrollX), " +
+            "    y: Math.max(0, rect.top + window.scrollY), " +
+            "    width: rect.width, " +
+            "    height: rect.height " +
+            "  }; " +
+            "})()",
             selector.replace("'", "\\'")
         );
-        evaluate(script);
-        // 等待滚动完成
-        Thread.sleep(200);
+        JsonNode result = evaluate(script);
+        JsonNode clipValue = result.path("result").path("value");
+        if (clipValue.isMissingNode() || clipValue.isNull()) {
+            throw new RuntimeException("未找到元素: " + selector);
+        }
+        if (clipValue.path("empty").asBoolean(false)) {
+            throw new RuntimeException("元素尺寸为空，无法截图: " + selector);
+        }
+
+        double width = clipValue.path("width").asDouble();
+        double height = clipValue.path("height").asDouble();
+        if (width <= 0 || height <= 0) {
+            throw new RuntimeException("元素尺寸为空，无法截图: " + selector);
+        }
+
+        return mapper.createObjectNode()
+                .put("x", clipValue.path("x").asDouble(0))
+                .put("y", clipValue.path("y").asDouble(0))
+                .put("width", width)
+                .put("height", height)
+                .put("scale", 1);
     }
 
     private void dispatchMouseEvent(String type, double x, double y) throws Exception {

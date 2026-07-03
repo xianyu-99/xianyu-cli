@@ -68,6 +68,18 @@ class CdpWebSocketClientTest {
     }
 
     @Test
+    void onTextBuffersFragmentedJsonUntilFinalFrame() {
+        AtomicReference<JsonNode> received = new AtomicReference<>();
+        client.onEvent("Runtime.consoleAPICalled", received::set);
+
+        client.handleTextFrame("{\"method\":\"Runtime.console", false);
+        assertNull(received.get());
+
+        client.handleTextFrame("APICalled\",\"params\":{\"value\":42}}", true);
+        assertEquals(42, received.get().path("value").asInt());
+    }
+
+    @Test
     void isConnectedShouldReturnFalseBeforeConnecting() {
         assertFalse(client.isConnected());
     }

@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BrowserToolProviderTest {
 
-    private BrowserToolProvider provider;
+    private TestBrowserToolProvider provider;
     private TestCdpSession mockSession;
 
     static class TestWebSocketClient extends CdpWebSocketClient {
@@ -41,6 +41,9 @@ class BrowserToolProviderTest {
         boolean failCleanDom = false;
         int cleanDomCalls = 0;
         int cleanDomMaxLength = -1;
+        String switchedTargetId = null;
+        String createdTabUrl = null;
+        String createdTargetId = "new-tab";
 
         public TestCdpSession() {
             super(new TestWebSocketClient());
@@ -88,11 +91,31 @@ class BrowserToolProviderTest {
             }
             return "<body>mock clean dom</body>";
         }
+
+        @Override
+        public void switchToTab(String targetId) {
+            this.switchedTargetId = targetId;
+        }
+
+        @Override
+        public String createTab(String url) {
+            this.createdTabUrl = url;
+            return createdTargetId;
+        }
+    }
+
+    static class TestBrowserToolProvider extends BrowserToolProvider {
+        String reconnectedTargetId = null;
+
+        @Override
+        void reconnectToTarget(String targetId) {
+            this.reconnectedTargetId = targetId;
+        }
     }
 
     @BeforeEach
     void setUp() {
-        provider = new BrowserToolProvider();
+        provider = new TestBrowserToolProvider();
         mockSession = new TestCdpSession();
         provider.setSession(mockSession);
     }
@@ -193,5 +216,23 @@ class BrowserToolProviderTest {
         String result = provider.evaluate(Map.of("script", "return 1 + 1;"));
         assertEquals("return 1 + 1;", mockSession.evaluateScript);
         assertTrue(result.contains("mock result"));
+    }
+
+    @Test
+    void tabSwitchReconnectsToSelectedTarget() {
+        String result = provider.tab(Map.of("action", "switch", "target_id", "tab-2"));
+
+        assertEquals("tab-2", mockSession.switchedTargetId);
+        assertEquals("tab-2", provider.reconnectedTargetId);
+        assertTrue(result.contains("已切换到标签页: tab-2"));
+    }
+
+    @Test
+    void tabNewReconnectsToCreatedTarget() {
+        String result = provider.tab(Map.of("action", "new", "url", "https://example.test"));
+
+        assertEquals("https://example.test", mockSession.createdTabUrl);
+        assertEquals("new-tab", provider.reconnectedTargetId);
+        assertTrue(result.contains("已创建新标签页: new-tab"));
     }
 }

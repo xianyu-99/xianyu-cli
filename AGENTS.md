@@ -35,18 +35,24 @@
 
 - Java 17+
 - Maven
-- 可用的 `GLM_API_KEY`
+- 可用的默认模型 API Key：`ANTHROPIC_API_KEY`（默认 provider 为 `anthropic`，默认 DeepSeek Anthropic 兼容端点）
+- 可选模型 Key：`GLM_API_KEY`、`DEEPSEEK_API_KEY`
 
-API Key 当前读取顺序以代码为准：
+模型配置当前读取顺序以代码为准：
 
-1. 仓库当前目录下的 `.env`
-2. 用户主目录下的 `.env`
-3. 环境变量 `GLM_API_KEY`
+1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl`
+2. 环境变量：`ANTHROPIC_API_KEY` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` 等
+3. 仓库当前目录下的 `.env`
+4. 用户主目录下的 `.env`
 
 `.env.example` 当前包含：
 
 ```bash
-GLM_API_KEY=your_api_key_here
+ANTHROPIC_API_KEY=your_api_key_here
+# ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+# ANTHROPIC_MODEL=deepseek-v4-pro
+# GLM_API_KEY=your_api_key_here
+# DEEPSEEK_API_KEY=your_deepseek_api_key_here
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text:latest
 EMBEDDING_BASE_URL=http://localhost:11434

@@ -320,8 +320,8 @@ public class TuiApplication {
     /**
      * 启动 TUI 模式，传入已初始化的 Agent。
      */
-    public static void launch(Agent agent) {
-        launch(agent, TuiApplication::new, System.err);
+    public static boolean launch(Agent agent) {
+        return launch(agent, TuiApplication::new, System.err);
     }
 
     static boolean launch(Agent agent, ApplicationFactory factory, PrintStream err) {

@@ -3,10 +3,14 @@
 MCP-Native Agent CLI，对标 Claude Code。Java 17 实现，支持多模型、多 Agent 协作、MCP 协议、浏览器操控、插件系统。
 
 ```
-+----------------------------------------------------------+
-| YuCLI                                                    |
-| MCP-Native Agent CLI v19.0.0                            |
-+----------------------------------------------------------+
+YuCLI  v19.0.0  session=local  ready
+██╗   ██╗██╗   ██╗ ██████╗██╗     ██╗
+╚██╗ ██╔╝██║   ██║██╔════╝██║     ██║
+ ╚████╔╝ ██║   ██║██║     ██║     ██║
+  ╚██╔╝  ██║   ██║██║     ██║     ██║
+   ██║   ╚██████╔╝╚██████╗███████╗██║
+   ╚═╝    ╚═════╝  ╚═════╝╚══════╝╚═╝
+输入消息开始对话   ·   /help 查看命令   ·   /exit 退出
 ```
 
 ## 快速开始
@@ -31,16 +35,20 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```bash
 # 方式一：配置文件 ~/.YuCLI/config.json
 {
-  "defaultProvider": "deepseek",
+  "defaultProvider": "anthropic",
   "providers": {
+    "anthropic": {
+      "apiKey": "your-key",
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "model": "deepseek-v4-pro"
+    },
     "deepseek": { "apiKey": "your-key" },
-    "glm": { "apiKey": "your-key" },
-    "anthropic": { "apiKey": "your-key" }
+    "glm": { "apiKey": "your-key" }
   }
 }
 
 # 方式二：环境变量
-export DEEPSEEK_API_KEY=your-key
+export ANTHROPIC_API_KEY=your-key
 ```
 
 ### 运行

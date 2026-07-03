@@ -41,17 +41,45 @@ public class BrowserToolProvider {
             discovery = new ChromeDiscovery(port);
         }
 
-        String wsUrl = discovery.getWebSocketDebuggerUrl();
-        wsClient = new CdpWebSocketClient();
-        wsClient.connect(wsUrl).get();
+        return connectToWebSocket(discovery.getWebSocketDebuggerUrl());
+    }
 
-        // 启用必要域
-        wsClient.sendSync("Page.enable", null);
-        wsClient.sendSync("Runtime.enable", null);
-        wsClient.sendSync("DOM.enable", null);
+    private synchronized CdpSession connectToWebSocket(String wsUrl) throws Exception {
+        CdpWebSocketClient newClient = new CdpWebSocketClient();
+        newClient.connect(wsUrl).get();
+        try {
+            enableCoreDomains(newClient);
+        } catch (Exception e) {
+            try {
+                newClient.close().get();
+            } catch (Exception ignored) {
+            }
+            throw e;
+        }
 
-        session = new CdpSession(wsClient);
+        CdpWebSocketClient oldClient = wsClient;
+        wsClient = newClient;
+        session = new CdpSession(newClient);
+        if (oldClient != null && oldClient != newClient) {
+            try {
+                oldClient.close().get();
+            } catch (Exception ignored) {
+            }
+        }
         return session;
+    }
+
+    private void enableCoreDomains(CdpWebSocketClient client) throws Exception {
+        client.sendSync("Page.enable", null);
+        client.sendSync("Runtime.enable", null);
+        client.sendSync("DOM.enable", null);
+    }
+
+    void reconnectToTarget(String targetId) throws Exception {
+        if (discovery == null) {
+            throw new IllegalStateException("Chrome discovery 未初始化");
+        }
+        connectToWebSocket(discovery.getWebSocketDebuggerUrl(targetId));
     }
 
     public synchronized void close() {
@@ -115,8 +143,9 @@ public class BrowserToolProvider {
             java.nio.file.Path path = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), filename);
             java.nio.file.Files.write(path, Base64.getDecoder().decode(base64));
 
+            String scope = selector != null && !selector.isBlank() ? "元素" : (fullPage ? "全页" : "视口");
             return "✅ 截图已保存: " + path.toAbsolutePath() +
-                    "\n尺寸: " + (fullPage ? "全页" : "视口") +
+                    "\n尺寸: " + scope +
                     (selector != null ? " (元素: " + selector + ")" : "");
         } catch (Exception e) {
             return "❌ 截图失败: " + e.getMessage();
@@ -239,11 +268,13 @@ public class BrowserToolProvider {
                         yield "错误：switch 操作需要 target_id 参数";
                     }
                     s.switchToTab(targetId);
+                    reconnectToTarget(targetId);
                     yield "✅ 已切换到标签页: " + targetId;
                 }
                 case "new" -> {
                     String url = args.getOrDefault("url", "about:blank");
                     String newId = s.createTab(url);
+                    reconnectToTarget(newId);
                     yield "✅ 已创建新标签页: " + newId + " (" + url + ")";
                 }
                 case "close" -> {
