@@ -9,6 +9,9 @@ final class CliCommandParser {
         EXIT,
         CLEAR,
         SWITCH_MODEL,
+        LOOP_STATUS,
+        EVAL_INFO,
+        AGENT_LIST,
         SWITCH_PLAN,
         SWITCH_TEAM,
         SWITCH_HITL,
@@ -89,6 +92,23 @@ final class CliCommandParser {
 
         if (trimmed.regionMatches(true, 0, "/model ", 0, 7)) {
             return new ParsedCommand(CommandType.SWITCH_MODEL, trimmed.substring(7).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/loop")) {
+            return new ParsedCommand(CommandType.LOOP_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/eval")) {
+            return new ParsedCommand(CommandType.EVAL_INFO, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/eval ", 0, 6)) {
+            return new ParsedCommand(CommandType.EVAL_INFO, trimmed.substring(6).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/agents") || trimmed.equalsIgnoreCase("/agents list")
+                || trimmed.equalsIgnoreCase("/agent list")) {
+            return new ParsedCommand(CommandType.AGENT_LIST, null);
         }
 
         if (trimmed.equalsIgnoreCase("/plan")) {

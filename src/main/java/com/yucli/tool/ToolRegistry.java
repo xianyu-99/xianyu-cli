@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yucli.hook.HookManager;
+import com.yucli.hook.HookDecision;
 import com.yucli.mcp.protocol.McpToolDescriptor;
 import com.yucli.rag.CodeRetriever;
 import com.yucli.rag.SearchResultFormatter;
@@ -66,18 +68,30 @@ public class ToolRegistry {
     private HtmlExtractor htmlExtractor;
     private NetworkPolicy networkPolicy;
     private BrowserToolProvider browserToolProvider;
+    private HookManager hookManager;
 
     public ToolRegistry() {
-        this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS);
+        this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, HookManager.disabled());
+    }
+
+    public ToolRegistry(HookManager hookManager) {
+        this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, hookManager);
     }
 
     ToolRegistry(long commandTimeoutSeconds) {
-        this(commandTimeoutSeconds, Math.max(commandTimeoutSeconds + 5, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS));
+        this(commandTimeoutSeconds, Math.max(commandTimeoutSeconds + 5, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS),
+                HookManager.disabled());
     }
 
     ToolRegistry(long commandTimeoutSeconds, long toolBatchTimeoutSeconds) {
+        this(commandTimeoutSeconds, toolBatchTimeoutSeconds, HookManager.disabled());
+    }
+
+    ToolRegistry(long commandTimeoutSeconds, long toolBatchTimeoutSeconds, HookManager hookManager) {
         this.commandTimeoutSeconds = commandTimeoutSeconds;
         this.toolBatchTimeoutSeconds = toolBatchTimeoutSeconds;
+        this.hookManager = hookManager == null ? HookManager.disabled() : hookManager;
+        this.hookManager.setProjectPath(Path.of(projectPath));
         // 注册内置工具
         registerFileTools();
         registerShellTools();
@@ -93,6 +107,7 @@ public class ToolRegistry {
     public void setProjectPath(String projectPath) {
         this.projectPath = projectPath;
         this.pathGuard = new PathGuard(projectPath);
+        this.hookManager.setProjectPath(Path.of(projectPath));
     }
 
     /**
@@ -675,26 +690,37 @@ public class ToolRegistry {
             return "未知工具: " + name;
         }
 
+        HookDecision hookDecision = hookManager.runPreToolUse(name, argumentsJson);
+        if (!hookDecision.allowed()) {
+            String reason = hookDecision.reason() == null || hookDecision.reason().isBlank()
+                    ? "hook 拒绝了此次工具调用"
+                    : hookDecision.reason();
+            return "[Hook] PreToolUse 拒绝: " + reason;
+        }
+
         boolean shouldAudit = shouldAudit(name);
         long start = System.nanoTime();
+        String result;
 
         try {
             McpRegisteredTool mcpTool = mcpTools.get(name);
             if (mcpTool != null) {
-                String result = mcpTool.invoker().apply(argumentsJson);
+                result = mcpTool.invoker().apply(argumentsJson);
                 if (shouldAudit) {
                     auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
                 }
+                hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
                 return result;
             }
 
             PluginRegisteredTool pluginTool = pluginTools.get(name);
             if (pluginTool != null) {
                 JsonNode argsNode = mapper.readTree(argumentsJson);
-                String result = pluginTool.executor().execute(argsNode);
+                result = pluginTool.executor().execute(argsNode);
                 if (shouldAudit) {
                     auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
                 }
+                hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
                 return result;
             }
 
@@ -702,23 +728,28 @@ public class ToolRegistry {
             Map<String, String> argMap = new HashMap<>();
             args.fields().forEachRemaining(entry ->
                     argMap.put(entry.getKey(), entry.getValue().asText()));
-            String result = tool.executor().execute(argMap);
+            result = tool.executor().execute(argMap);
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
             }
+            hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
             return result;
         } catch (PolicyException e) {
+            result = "🛡️ 策略拒绝: " + e.getMessage();
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.denyByPolicy(
                         name, argumentsJson, e.getMessage(), elapsedMillis(start)));
             }
-            return "🛡️ 策略拒绝: " + e.getMessage();
+            hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
+            return result;
         } catch (Exception e) {
+            result = "工具执行失败: " + e.getMessage();
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.error(
                         name, argumentsJson, e.getMessage(), elapsedMillis(start)));
             }
-            return "工具执行失败: " + e.getMessage();
+            hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
+            return result;
         }
     }
 

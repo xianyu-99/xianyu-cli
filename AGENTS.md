@@ -157,6 +157,12 @@ mvn test -Dtest=CodeChunkerTest,CodeAnalyzerTest,VectorStoreTest,CodeIndexTest
 mvn test -Dtest=ExecutionPlanTest
 ```
 
+手动运行 EvalHarness（会调用真实 LLM、执行本地 setup/verify 脚本，默认测试不会运行）：
+
+```bash
+mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
+```
+
 ## 当前产品行为
 
 ### 1. ReAct 模式
@@ -247,6 +253,27 @@ mvn test -Dtest=ExecutionPlanTest
 - 任务执行完后回到默认 `ReAct`
 - `ReAct`、`Plan-and-Execute` 和 `Multi-Agent` 三条路径都应写回记忆
 
+#### 6.1 可配置 SubAgent Profile（配置层）
+
+- 当前第一步只提供轻量配置/加载层，主模块在 `src/main/java/com/yucli/agent/config/`，尚未接入 `AgentOrchestrator` 执行路径
+- Profile 搜索目录：
+  - 用户级：`~/.YuCLI/agents/*.json`
+  - 项目级：`.YuCLI/agents/*.json`
+- 合并规则：先加载用户级，再加载项目级；同名 profile 由项目级覆盖用户级
+- 当前 JSON 格式：
+
+```json
+{
+  "name": "reviewer",
+  "role": "REVIEWER",
+  "instructions": "审查执行结果，指出风险和缺口。",
+  "tools": ["read_file", "search_code"],
+  "model": "glm-5.1"
+}
+```
+
+- `name`、`role`、`instructions` 必填；`role` 支持 `PLANNER` / `WORKER` / `REVIEWER`（大小写不敏感）；`tools` 默认空列表；`model` 可选，仅解析保存，暂不切换运行模型
+
 ### 7. HITL 审批系统
 
 - 主模块在 `src/main/java/com/yucli/hitl/`
@@ -285,6 +312,36 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `/audit [N]`：看今日最近 N 条审计（默认 10，最大 100）
 - 提示词联动：`Agent` / `PlanExecuteAgent` / `SubAgent` 三处都告知 LLM 安全策略硬规则与 `🛡️ 策略拒绝` 输出格式，避免 LLM 原样重试同一条违规请求
 - **不做沙箱的取舍**：本地 Agent CLI（参考 Claude Code / Cursor / Aider）默认都不做容器/VM 沙箱——沙箱削弱 Agent 能力（不能装依赖、不能跑全局命令）、给虚假安全感（容器逃逸真实存在）、体验更差。生产级 Agent 沙箱实际是 microVM-level（Devin / Modal / Anthropic Computer Use 用 Firecracker / gVisor），不是 Docker-level。想做隔离请参考 ROADMAP 末尾「Pro 升级版本」
+
+#### 7.2 可配置 Hooks
+
+- 主模块在 `src/main/java/com/yucli/hook/`
+- 当前是工具生命周期 hook，不是通用事件总线；已接入 `ToolRegistry.executeTool()`
+- 默认读取顺序：
+  - 用户级：`~/.YuCLI/hooks.json`
+  - 项目级：`.YuCLI/hooks.json`
+- 当前支持事件：
+  - `PreToolUse`：工具执行前触发；hook 命令非 0、超时或执行失败会阻断本次工具调用，返回 `[Hook] PreToolUse 拒绝: ...`
+  - `PostToolUse`：工具执行后触发；失败只向 stderr 打印警告，不改变工具结果
+- `matcher` 支持精确工具名、`*`、前缀通配如 `mcp__*`
+- hook 命令通过 stdin 接收 JSON payload，包含 `event / tool_name / project_path / timestamp / arguments_raw / arguments`
+- 配置格式：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "write_file", "commands": ["python scripts/check_write.py"], "timeoutSeconds": 5 }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "command": "python scripts/log_tool.py" }
+    ]
+  }
+}
+```
+
+- HITL 与 hook 的协同顺序：`HitlToolRegistry` 先处理人工审批；审批通过后进入 `ToolRegistry`，再执行 `PreToolUse`、策略层、真实工具、`PostToolUse`
+- 当前不支持 HTTP hook、异步 hook、LLM prompt hook、按 hook 返回 JSON 修改工具参数；这些属于后续扩展
 
 ### 8. 异步执行与并行工具调用
 
@@ -412,6 +469,15 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `/session export <id> [path]`：导出会话
   - `/resume`：恢复最近未关闭的会话
 
+### 16. Loop / Eval 轻量入口
+
+- `/loop`：只读状态命令，展示 ReAct 循环的当前兜底规则。它基于 `AgentBudget` 暴露 Token 预算、重复工具调用停滞检测窗口、硬轮数上限；不调用 LLM、不执行工具、不改变会话状态
+- `/eval`：只读说明入口，展示 EvalHarness 的用途、用例格式和手动运行命令；不运行 harness、不调用真实 LLM
+- `/eval cases`：说明 `src/test/resources/eval/cases.json` 的 JSON array 格式，字段为 `id / instruction / setupScript / verifyScript`
+- `/eval run`：只打印显式启用命令 `mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true` 和风险提示
+- `EvalHarness` 默认通过 `@EnabledIfSystemProperty(named = "YuCLI.eval.enabled", matches = "true")` 跳过，不能改成默认执行真实 LLM。涉及 eval harness 的改动至少保留一个测试确认默认门禁仍在
+- Eval case 的 `setupScript` / `verifyScript` 都在临时目录内执行，`verifyScript` 退出码 `0` 表示通过；新增用例时不要依赖真实用户目录、全局状态或不可回收的副作用
+
 ## 仓库结构
 
 ```text
@@ -422,7 +488,10 @@ src/main/java/com/yucli
 │   ├── AgentRole.java
 │   ├── AgentMessage.java
 │   ├── SubAgent.java
-│   └── AgentOrchestrator.java
+│   ├── AgentOrchestrator.java
+│   └── config/
+│       ├── AgentProfile.java
+│       └── AgentProfileLoader.java
 ├── cli/
 │   ├── Main.java
 │   ├── CliCommandParser.java
@@ -494,6 +563,14 @@ src/main/java/com/yucli
 │   ├── HitlHandler.java
 │   ├── TerminalHitlHandler.java
 │   └── HitlToolRegistry.java
+├── hook/
+│   ├── HookManager.java
+│   ├── HookConfigLoader.java
+│   ├── HookConfig.java
+│   ├── HookDefinition.java
+│   ├── HookDecision.java
+│   ├── HookEvent.java
+│   └── HookCommandExecutor.java
 ├── web/
 │   ├── SearchProvider.java
 │   ├── ZhipuSearchProvider.java
@@ -527,6 +604,7 @@ src/main/java/com/yucli
 - `AgentRoleTest`
 - `AgentMessageTest`
 - `AgentOrchestratorTest`
+- `AgentProfileLoaderTest`
 - `EmbeddingClientTest`
 - `SearchResultTest`、`NetworkPolicyTest`、`HtmlExtractorTest`、`WebFetcherTest`、`SearchProviderFactoryTest`、`ZhipuSearchProviderTest`
 - `VectorStoreTest`
@@ -537,6 +615,7 @@ src/main/java/com/yucli
 - `ApprovalResultTest`
 - `HitlToolRegistryTest`
 - `TerminalHitlHandlerTest`
+- `HookDefinitionTest`、`HookConfigLoaderTest`、`ToolRegistryHookTest`
 - `ToolRegistryTest`
 - `McpSchemaSanitizerTest`、`McpConfigLoaderTest`、`JsonRpcClientTest`、`McpToolBridgeTest`、`McpResourceCacheTest`、`AtMentionParserTest`、`AtMentionExpanderTest`、`AtMentionCompleterTest`、`NotificationRouterTest`
 - `PathGuardTest`、`CommandGuardTest`、`AuditLogTest`
@@ -698,7 +777,7 @@ src/main/java/com/yucli
 
 ### 2. 改命令入口，要联动这几处
 
-如果修改 `/plan`、`/team`、`/cancel`、`/hitl`、`/mcp`、`/policy`、`/audit`、`/browser`、`/skill`、`/tui`、`/clear`、`/memory`、`/save`、`/index`、`/search`、`/graph`、`/exit`、`/plugin`、`/session`、`/resume` 或输入解析：
+如果修改 `/plan`、`/team`、`/loop`、`/eval`、`/cancel`、`/hitl`、`/mcp`、`/policy`、`/audit`、`/browser`、`/skill`、`/tui`、`/clear`、`/memory`、`/save`、`/index`、`/search`、`/graph`、`/exit`、`/plugin`、`/session`、`/resume` 或输入解析：
 
 - `Main.java`
 - `CliCommandParser.java`

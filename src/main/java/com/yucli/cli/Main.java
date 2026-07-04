@@ -1,10 +1,14 @@
 package com.yucli.cli;
 
 import com.yucli.agent.Agent;
+import com.yucli.agent.AgentBudget;
 import com.yucli.agent.AgentOrchestrator;
 import com.yucli.agent.PlanExecuteAgent;
+import com.yucli.agent.config.AgentProfile;
+import com.yucli.agent.config.AgentProfileLoader;
 import com.yucli.ProductInfo;
 import com.yucli.config.YuCLIConfig;
+import com.yucli.hook.HookManager;
 import com.yucli.hitl.HitlToolRegistry;
 import com.yucli.hitl.TerminalHitlHandler;
 import com.yucli.llm.LlmClient;
@@ -46,6 +50,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -141,7 +146,10 @@ public class Main {
 
         try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
             TerminalHitlHandler hitlHandler = new TerminalHitlHandler(false);
-            HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(hitlHandler);
+            Path projectDir = Path.of(".").toAbsolutePath().normalize();
+            HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(
+                    hitlHandler,
+                    HookManager.loadDefault(projectDir));
             McpServerManager mcpServerManager = new McpServerManager(hitlToolRegistry, Path.of("."));
             mcpServerManager.setLlmClient(llmClient);
             try {
@@ -231,7 +239,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
+                        System.out.println("可用命令：/model /loop /eval /agents /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
                         continue;
                     }
                     case TUI_LAUNCH -> {
@@ -264,6 +272,18 @@ public class Main {
                     case BROWSER_STATUS -> {
                         System.out.println(reactAgent.getToolRegistry().getBrowserStatus());
                         System.out.println();
+                        continue;
+                    }
+                    case LOOP_STATUS -> {
+                        printLoopStatus(llmClient);
+                        continue;
+                    }
+                    case EVAL_INFO -> {
+                        printEvalInfo(command.payload());
+                        continue;
+                    }
+                    case AGENT_LIST -> {
+                        printAgentProfiles(projectDir);
                         continue;
                     }
                     case SKILL_LIST -> {
@@ -1071,6 +1091,9 @@ public class Main {
                 "在普通任务里输入 '@server:protocol://path' 可显式引用 MCP resource",
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
+                "输入 '/loop' 查看 ReAct 循环保底预算与停滞检测规则",
+                "输入 '/eval' 查看手动 EvalHarness 用例格式与启用命令（默认不运行真实 LLM）",
+                "输入 '/agents' 查看用户级和项目级 SubAgent Profile 配置",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
                 "输入 '/plugin' 查看插件，'/plugin enable|disable <name>' 启用/禁用插件，'/plugin reload' 重新加载",
@@ -1088,6 +1111,76 @@ public class Main {
                 "输入 '/resume' 恢复上次未完成的会话",
                 "输入 '/exit' 或 '/quit' 退出"
         );
+    }
+
+    private static void printLoopStatus(LlmClient llmClient) {
+        AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
+        System.out.println("Loop 状态：");
+        System.out.println("   模式: ReAct 由 LLM 决定是否继续调用工具；没有固定 10 轮上限");
+        System.out.println("   Token 预算: " + budget.tokenBudget() + "（当前模型上下文窗口的约 80%）");
+        System.out.println("   停滞检测: 连续 " + budget.stagnationWindow() + " 轮完全相同的工具名 + 参数会强制收尾");
+        System.out.println("   硬轮数上限: " + budget.hardMaxIterations() + " 轮");
+        System.out.println("   可调系统属性: YuCLI.react.stagnation.window / YuCLI.react.hard.max.iterations");
+        System.out.println();
+    }
+
+    private static void printEvalInfo(String payload) {
+        String topic = payload == null || payload.isBlank()
+                ? "help"
+                : payload.trim().toLowerCase(java.util.Locale.ROOT);
+
+        if ("cases".equals(topic)) {
+            System.out.println("Eval cases 格式：");
+            System.out.println("   文件: src/test/resources/eval/cases.json");
+            System.out.println("   顶层: JSON array");
+            System.out.println("   字段: id, instruction, setupScript, verifyScript");
+            System.out.println("   setupScript/verifyScript 在临时目录内执行；verifyScript 退出码 0 表示通过");
+            System.out.println();
+            return;
+        }
+
+        if ("run".equals(topic)) {
+            System.out.println("EvalHarness 手动运行：");
+            System.out.println("   默认 mvn test 不会运行真实 LLM 评测");
+            System.out.println("   显式运行: mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true");
+            System.out.println("   风险: 会调用真实 LLM、执行本地 setup/verify 脚本，并消耗 API 配额");
+            System.out.println();
+            return;
+        }
+
+        System.out.println("EvalHarness：");
+        System.out.println("   /eval cases - 查看 src/test/resources/eval/cases.json 用例格式");
+        System.out.println("   /eval run   - 查看显式启用手动评测的 Maven 命令");
+        System.out.println("   说明: /eval 只展示说明，不运行 harness，也不会调用真实 LLM");
+        System.out.println();
+    }
+
+    private static void printAgentProfiles(Path projectDir) {
+        try {
+            Map<String, AgentProfile> profiles = new AgentProfileLoader(projectDir).load();
+            if (profiles.isEmpty()) {
+                System.out.println("SubAgent Profiles：未发现配置");
+                System.out.println("   用户级: ~/.YuCLI/agents/*.json");
+                System.out.println("   项目级: .YuCLI/agents/*.json");
+                System.out.println();
+                return;
+            }
+
+            System.out.println("SubAgent Profiles：");
+            profiles.values().forEach(profile -> {
+                System.out.println("   - " + profile.getName()
+                        + " [" + profile.getRole() + "]"
+                        + " tools=" + profile.getTools().size()
+                        + (profile.getModel() == null ? "" : " model=" + profile.getModel()));
+                if (profile.getSourcePath() != null) {
+                    System.out.println("     source: " + profile.getSourcePath());
+                }
+            });
+            System.out.println();
+        } catch (IOException e) {
+            System.out.println("❌ 读取 SubAgent Profile 失败: " + e.getMessage());
+            System.out.println();
+        }
     }
 
     private static void printPolicyStatus(Agent reactAgent) {

@@ -217,4 +217,33 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.PLUGIN_RELOAD, CliCommandParser.parse("/plugin reload").type());
         assertNull(CliCommandParser.parse("/plugin reload").payload());
     }
+
+    @Test
+    void parsesLoopStatusCommand() {
+        CliCommandParser.ParsedCommand command = CliCommandParser.parse("/loop");
+
+        assertEquals(CliCommandParser.CommandType.LOOP_STATUS, command.type());
+        assertNull(command.payload());
+    }
+
+    @Test
+    void parsesEvalInfoCommands() {
+        CliCommandParser.ParsedCommand help = CliCommandParser.parse("/eval");
+        CliCommandParser.ParsedCommand cases = CliCommandParser.parse("/eval cases");
+        CliCommandParser.ParsedCommand run = CliCommandParser.parse("/eval run");
+
+        assertEquals(CliCommandParser.CommandType.EVAL_INFO, help.type());
+        assertNull(help.payload());
+        assertEquals(CliCommandParser.CommandType.EVAL_INFO, cases.type());
+        assertEquals("cases", cases.payload());
+        assertEquals(CliCommandParser.CommandType.EVAL_INFO, run.type());
+        assertEquals("run", run.payload());
+    }
+
+    @Test
+    void parsesAgentProfileListCommands() {
+        assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agents").type());
+        assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agents list").type());
+        assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agent list").type());
+    }
 }

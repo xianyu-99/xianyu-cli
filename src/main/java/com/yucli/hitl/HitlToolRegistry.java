@@ -1,5 +1,6 @@
 package com.yucli.hitl;
 
+import com.yucli.hook.HookManager;
 import com.yucli.policy.AuditLog;
 import com.yucli.tool.ToolRegistry;
 
@@ -21,7 +22,11 @@ public class HitlToolRegistry extends ToolRegistry {
     private final HitlHandler hitlHandler;
 
     public HitlToolRegistry(HitlHandler hitlHandler) {
-        super();
+        this(hitlHandler, HookManager.disabled());
+    }
+
+    public HitlToolRegistry(HitlHandler hitlHandler, HookManager hookManager) {
+        super(hookManager);
         this.hitlHandler = hitlHandler;
     }
 

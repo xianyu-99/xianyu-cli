@@ -10,8 +10,8 @@ import com.yucli.hitl.HitlHandler;
 import com.yucli.hitl.ApprovalResult;
 import com.yucli.hitl.ApprovalRequest;
 import com.yucli.hitl.HitlToolRegistry;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.File;
 import java.io.IOException;
@@ -23,7 +23,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@Disabled("Manual eval harness: runs real LLM calls and local verification scripts")
+@EnabledIfSystemProperty(named = "YuCLI.eval.enabled", matches = "true")
 public class EvalHarness {
     private static final ObjectMapper mapper = new ObjectMapper();
 

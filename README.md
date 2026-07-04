@@ -113,6 +113,9 @@ yucli
 
 | 命令 | 说明 |
 |------|------|
+| `/loop` | 查看 ReAct 循环保险阀状态 |
+| `/eval [cases\|run]` | 查看 EvalHarness 用例格式或手动运行说明，不默认调用真实 LLM |
+| `/agents` | 查看用户级和项目级 SubAgent Profile 配置 |
 | `/plan [任务]` | Plan-and-Execute 模式 |
 | `/team [任务]` | Multi-Agent 协作模式 |
 | `/model <name>` | 切换模型（deepseek/glm/anthropic） |
@@ -213,6 +216,97 @@ src/main/java/com/yucli/
 ## 技术栈
 
 Java 17 / Maven / OkHttp / Jackson / JLine3 / SQLite / JavaParser / Lanterna
+
+## Loop / Eval 说明
+
+### `/loop`
+
+`/loop` 是只读状态命令，用来查看 ReAct 循环的当前兜底规则。ReAct 是否继续由模型返回的 `tool_calls` 决定；`AgentBudget` 只负责三类保险阀：Token 预算、重复工具调用停滞检测、硬轮数上限。该命令不会调用 LLM，也不会执行工具。
+
+### `/eval`
+
+`/eval` 是 EvalHarness 的说明入口，只打印用例格式和手动运行命令，不会默认触发真实 LLM 评测。
+
+- `/eval cases`：查看 `src/test/resources/eval/cases.json` 的字段约定
+- `/eval run`：查看显式启用手动评测的 Maven 命令
+
+Eval case 顶层是 JSON array，每个对象字段如下：
+
+```json
+{
+  "id": "file-write-1",
+  "instruction": "Create a file named hello.txt.",
+  "setupScript": "",
+  "verifyScript": "if (Test-Path 'hello.txt') { exit 0 } else { exit 1 }"
+}
+```
+
+字段说明：
+
+- `id`：稳定用例 ID
+- `instruction`：发给 Agent 的任务
+- `setupScript`：可选，运行前在临时目录执行
+- `verifyScript`：可选，运行后在临时目录执行，退出码 `0` 表示通过
+
+默认 `mvn test` 不会运行真实 LLM 评测。需要手动评测时必须显式启用：
+
+```bash
+mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
+```
+
+这会调用真实 LLM、执行本地 setup/verify 脚本，并消耗 API 配额。
+
+## Hooks / SubAgent Profiles
+
+### Hooks
+
+YuCLI 支持可配置工具生命周期 hook。默认读取：
+
+1. `~/.YuCLI/hooks.json`
+2. `.YuCLI/hooks.json`
+
+当前事件：
+
+- `PreToolUse`：工具执行前触发；hook 命令非 0、超时或执行失败会阻断本次工具调用
+- `PostToolUse`：工具执行后触发；失败只打印警告，不改变工具结果
+
+配置示例：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "write_file", "commands": ["python scripts/check_write.py"], "timeoutSeconds": 5 }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "command": "python scripts/log_tool.py" }
+    ]
+  }
+}
+```
+
+`matcher` 支持精确工具名、`*`、前缀通配如 `mcp__*`。hook 命令通过 stdin 接收 JSON payload。
+
+### SubAgent Profiles
+
+YuCLI 已支持加载自定义 SubAgent Profile 配置。当前是配置/展示层，尚未替换 Multi-Agent 编排器的固定 Planner / Worker / Reviewer。
+
+默认读取：
+
+1. `~/.YuCLI/agents/*.json`
+2. `.YuCLI/agents/*.json`
+
+同名 profile 由项目级覆盖用户级。可用 `/agents` 查看当前加载结果。
+
+```json
+{
+  "name": "reviewer",
+  "role": "REVIEWER",
+  "instructions": "审查执行结果，指出风险和缺口。",
+  "tools": ["read_file", "search_code"],
+  "model": "glm-5.1"
+}
+```
 
 ## License
 
