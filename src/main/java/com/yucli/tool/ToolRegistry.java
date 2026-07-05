@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yucli.checkpoint.CheckpointEntry;
+import com.yucli.checkpoint.CheckpointManager;
 import com.yucli.hook.HookManager;
 import com.yucli.hook.HookDecision;
 import com.yucli.mcp.protocol.McpToolDescriptor;
@@ -14,6 +16,8 @@ import com.yucli.browser.BrowserToolProvider;
 import com.yucli.policy.AuditLog;
 import com.yucli.policy.CommandGuard;
 import com.yucli.policy.PathGuard;
+import com.yucli.policy.PermissionProfile;
+import com.yucli.policy.PermissionProfileDecision;
 import com.yucli.policy.PolicyException;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.web.FetchResult;
@@ -25,6 +29,7 @@ import com.yucli.web.SearchResult;
 import com.yucli.web.WebFetcher;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.BufferedReader;
 import java.nio.charset.StandardCharsets;
@@ -69,6 +74,9 @@ public class ToolRegistry {
     private NetworkPolicy networkPolicy;
     private BrowserToolProvider browserToolProvider;
     private HookManager hookManager;
+    private PermissionProfile permissionProfile = PermissionProfile.defaultProfile();
+    private CheckpointManager checkpointManager;
+    private Path checkpointRootOverride;
 
     public ToolRegistry() {
         this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, HookManager.disabled());
@@ -108,6 +116,9 @@ public class ToolRegistry {
         this.projectPath = projectPath;
         this.pathGuard = new PathGuard(projectPath);
         this.hookManager.setProjectPath(Path.of(projectPath));
+        if (checkpointManager != null) {
+            this.checkpointManager = createCheckpointManager();
+        }
     }
 
     /**
@@ -115,6 +126,57 @@ public class ToolRegistry {
      */
     public String getProjectPath() {
         return projectPath;
+    }
+
+    public void setPermissionProfile(PermissionProfile permissionProfile) {
+        this.permissionProfile = permissionProfile == null ? PermissionProfile.defaultProfile() : permissionProfile;
+    }
+
+    public PermissionProfile getPermissionProfile() {
+        return permissionProfile;
+    }
+
+    public void enableCheckpointing() {
+        enableCheckpointing(null);
+    }
+
+    public void enableCheckpointing(Path checkpointsRoot) {
+        this.checkpointRootOverride = checkpointsRoot;
+        this.checkpointManager = createCheckpointManager();
+    }
+
+    public CheckpointManager getCheckpointManager() {
+        return checkpointManager;
+    }
+
+    public String checkpointStatus() {
+        if (checkpointManager == null) {
+            return "Checkpoints: disabled";
+        }
+        return checkpointManager.statusText();
+    }
+
+    public String restoreLastCheckpoint() {
+        if (checkpointManager == null) {
+            return "Checkpoints are disabled";
+        }
+        try {
+            Optional<CheckpointEntry> restored = checkpointManager.restoreLast();
+            if (restored.isEmpty()) {
+                return "No checkpoints to restore";
+            }
+            CheckpointEntry entry = restored.get();
+            return "Restored checkpoint " + entry.getId() + " for " + entry.getTargetPath();
+        } catch (Exception e) {
+            return "Restore checkpoint failed: " + e.getMessage();
+        }
+    }
+
+    private CheckpointManager createCheckpointManager() {
+        Path root = pathGuard.getRootPath();
+        return checkpointRootOverride == null
+                ? new CheckpointManager(root)
+                : new CheckpointManager(root, checkpointRootOverride);
     }
 
     /**
@@ -154,12 +216,16 @@ public class ToolRegistry {
                     }
                     Path safe = pathGuard.resolveSafe(path);
                     try {
+                        Optional<CheckpointEntry> checkpoint = checkpointBeforeMutation(path);
                         Path parent = safe.getParent();
                         if (parent != null) {
                             Files.createDirectories(parent);
                         }
                         Files.writeString(safe, content);
-                        return "文件已写入: " + path;
+                        String suffix = checkpoint
+                                .map(entry -> " (checkpoint: " + entry.getId() + ")")
+                                .orElse("");
+                        return "文件已写入: " + path + suffix;
                     } catch (Exception e) {
                         return "写入文件失败: " + e.getMessage();
                     }
@@ -227,6 +293,10 @@ public class ToolRegistry {
                     }
                     Path projectRoot = pathGuard.resolveSafe(name);
                     try {
+                        if (Files.exists(projectRoot)) {
+                            return "创建项目失败: 目标已存在，无法创建可回滚 checkpoint";
+                        }
+                        Optional<CheckpointEntry> checkpoint = checkpointBeforeMutation(name);
                         Files.createDirectories(projectRoot);
 
                         switch (normalizedType) {
@@ -252,7 +322,10 @@ public class ToolRegistry {
                                         String.format("{\"name\": \"%s\", \"version\": \"1.0.0\"}", name));
                             }
                         }
-                        return "项目已创建: " + name + " (类型: " + normalizedType + ")";
+                        String suffix = checkpoint
+                                .map(entry -> " (checkpoint: " + entry.getId() + ")")
+                                .orElse("");
+                        return "项目已创建: " + name + " (类型: " + normalizedType + ")" + suffix;
                     } catch (Exception e) {
                         return "创建项目失败: " + e.getMessage();
                     }
@@ -701,6 +774,10 @@ public class ToolRegistry {
 
         boolean shouldAudit = shouldAudit(name);
         long start = System.nanoTime();
+        PermissionProfileDecision permissionDecision = evaluatePermission(name, argumentsJson);
+        if (permissionDecision.isDeny()) {
+            return denyByPermission(name, argumentsJson, permissionDecision, shouldAudit, start);
+        }
         String result;
 
         try {
@@ -835,7 +912,36 @@ public class ToolRegistry {
         }
     }
 
-    private long elapsedMillis(long startedAtNanos) {
+    protected PermissionProfileDecision evaluatePermission(String name, String argumentsJson) {
+        PermissionProfile profile = permissionProfile == null
+                ? PermissionProfile.defaultProfile()
+                : permissionProfile;
+        return profile.decision(name, argumentsJson);
+    }
+
+    protected String denyByPermission(String name,
+                                      String argumentsJson,
+                                      PermissionProfileDecision decision,
+                                      boolean shouldAudit,
+                                      long startedAtNanos) {
+        String reason = decision.reason() == null || decision.reason().isBlank()
+                ? "permission profile denied this tool call"
+                : decision.reason();
+        if (shouldAudit) {
+            auditLog.record(AuditLog.AuditEntry.denyByPolicy(
+                    name, argumentsJson, reason, elapsedMillis(startedAtNanos)));
+        }
+        return "[Permission] 调用被拒绝: " + reason;
+    }
+
+    protected Optional<CheckpointEntry> checkpointBeforeMutation(String path) throws IOException {
+        if (checkpointManager == null) {
+            return Optional.empty();
+        }
+        return Optional.of(checkpointManager.checkpointBeforeWrite(path));
+    }
+
+    protected long elapsedMillis(long startedAtNanos) {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
     }
 
@@ -843,7 +949,7 @@ public class ToolRegistry {
         return tools.containsKey(name);
     }
 
-    private static boolean shouldAudit(String name) {
+    protected static boolean shouldAudit(String name) {
         return AUDIT_TOOLS.contains(name) || (name != null && name.startsWith("mcp__"))
                 || (name != null && name.startsWith("plugin__"));
     }

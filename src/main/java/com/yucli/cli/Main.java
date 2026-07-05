@@ -20,6 +20,8 @@ import com.yucli.plan.ExecutionPlan;
 import com.yucli.rag.CodeIndex;
 import com.yucli.hitl.ApprovalPolicy;
 import com.yucli.policy.AuditLog;
+import com.yucli.policy.PermissionProfile;
+import com.yucli.policy.PermissionProfileLoader;
 import com.yucli.rag.CodeRetriever;
 import com.yucli.rag.CodeRelation;
 import com.yucli.rag.SearchResultFormatter;
@@ -167,6 +169,9 @@ public class Main {
             HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(
                     hitlHandler,
                     hookManager);
+            hitlToolRegistry.setProjectPath(projectDir.toString());
+            hitlToolRegistry.setPermissionProfile(loadPermissionProfile(projectDir));
+            hitlToolRegistry.enableCheckpointing();
             McpServerManager mcpServerManager = new McpServerManager(hitlToolRegistry, Path.of("."));
             mcpServerManager.setLlmClient(llmClient);
             try {
@@ -256,7 +261,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /loop /eval /agents /hooks /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
+                        System.out.println("可用命令：/model /loop /eval /agents /hooks /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /permissions /checkpoint /undo /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
                         continue;
                     }
                     case TUI_LAUNCH -> {
@@ -588,6 +593,18 @@ public class Main {
                         printPolicyStatus(reactAgent);
                         continue;
                     }
+                    case PERMISSION_STATUS -> {
+                        printPermissionStatus(reactAgent);
+                        continue;
+                    }
+                    case CHECKPOINT_STATUS -> {
+                        printCheckpointStatus(reactAgent);
+                        continue;
+                    }
+                    case UNDO_LAST -> {
+                        printUndoResult(reactAgent);
+                        continue;
+                    }
                     case AUDIT_TAIL -> {
                         printAuditTail(reactAgent, command.payload());
                         continue;
@@ -775,6 +792,16 @@ public class Main {
         return new AgentOrchestrator(llmClient, reactAgent.getToolRegistry(), reactAgent.getMemoryManager());
     }
 
+    private static PermissionProfile loadPermissionProfile(Path projectDir) {
+        try {
+            return PermissionProfileLoader.loadDefault(projectDir);
+        } catch (IOException e) {
+            System.err.println("Warning: failed to load permission profile; using default permissions: "
+                    + e.getMessage());
+            return PermissionProfile.defaultProfile();
+        }
+    }
+
     private record HeadlessCliOptions(String task, String mode, boolean jsonl) {
     }
 
@@ -806,6 +833,8 @@ public class Main {
         HookManager hookManager = HookManager.loadDefault(projectDir);
         HitlToolRegistry toolRegistry = new HitlToolRegistry(new TerminalHitlHandler(false), hookManager);
         toolRegistry.setProjectPath(projectDir.toString());
+        toolRegistry.setPermissionProfile(loadPermissionProfile(projectDir));
+        toolRegistry.enableCheckpointing();
         Agent reactAgent = new Agent(llmClient, toolRegistry);
 
         HeadlessRunner runner = new HeadlessRunner((task, mode) -> switch (mode) {
@@ -1269,6 +1298,8 @@ public class Main {
                 "输入 '/mcp auth <server>' 发起 OAuth 认证，'/mcp auth status' 查看认证状态，'/mcp auth revoke <server>' 撤销令牌",
                 "在普通任务里输入 '@server:protocol://path' 可显式引用 MCP resource",
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
+                "输入 '/permissions' 查看权限 Profile（allow / deny / ask）",
+                "输入 '/checkpoint' 查看最近工具写入快照，'/undo' 恢复最近一次写入前状态",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
                 "输入 '/loop' 查看 ReAct 循环保底预算与停滞检测规则",
                 "输入 '/eval' 查看手动 EvalHarness 用例格式与启用命令（默认不运行真实 LLM）",
@@ -1390,7 +1421,24 @@ public class Main {
         System.out.println("   命令黑名单: sudo / rm -rf 全盘 / mkfs / dd of=/dev / fork bomb / curl|sh / find / / chmod 777 / / shutdown");
         System.out.println("   写入文件上限: 5MB");
         System.out.println("   命令执行上限: 60 秒，输出 8KB（截断）");
+        System.out.println("   权限 Profile: /permissions 查看 allow / deny / ask 规则");
+        System.out.println("   Checkpoint: /checkpoint 查看最近快照，/undo 恢复最近一次写入前状态");
         System.out.println("   审计目录: " + reactAgent.getToolRegistry().getAuditLog().getAuditDir());
+        System.out.println();
+    }
+
+    private static void printPermissionStatus(Agent reactAgent) {
+        System.out.println(reactAgent.getToolRegistry().getPermissionProfile().statusText());
+        System.out.println();
+    }
+
+    private static void printCheckpointStatus(Agent reactAgent) {
+        System.out.println(reactAgent.getToolRegistry().checkpointStatus());
+        System.out.println();
+    }
+
+    private static void printUndoResult(Agent reactAgent) {
+        System.out.println(reactAgent.getToolRegistry().restoreLastCheckpoint());
         System.out.println();
     }
 

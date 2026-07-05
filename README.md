@@ -101,6 +101,8 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 **安全机制**
 - HITL 人工审批（`/hitl on`）
 - 路径围栏、命令黑名单、资源上限
+- 权限 Profile（`~/.YuCLI/permissions.json` + `.YuCLI/permissions.json`）
+- Checkpoint / Undo（`/checkpoint`、`/undo`）
 - 结构化审计日志（`/audit`）
 
 **插件系统**
@@ -144,6 +146,9 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 | `/memory clear` | 清空长期记忆 |
 | `/save <事实>` | 保存关键事实 |
 | `/policy` | 安全策略状态 |
+| `/permissions` | 查看权限 Profile（allow / deny / ask） |
+| `/checkpoint` | 查看最近工具写入快照 |
+| `/undo` | 恢复最近一次工具写入前状态 |
 | `/audit [N]` | 审计记录 |
 | `/skill list\|on\|off` | 管理 Skill |
 | `/tui` | 终端图形界面 |
@@ -192,6 +197,7 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 src/main/java/com/yucli/
 ├── agent/          # ReAct、Plan-and-Execute、Multi-Agent
 ├── browser/        # Chrome DevTools Protocol
+├── checkpoint/     # 工具写入前快照与 undo
 ├── cli/            # CLI 入口、命令解析
 ├── config/         # 配置管理
 ├── hitl/           # Human-in-the-Loop 审批
@@ -260,6 +266,26 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
 ```
 
 这会调用真实 LLM、执行本地 setup/verify 脚本，并消耗 API 配额。
+
+## Permissions / Checkpoints
+
+权限 Profile 用于在 HITL 之前增加显式 `allow` / `deny` / `ask` 规则。默认读取：
+
+1. `~/.YuCLI/permissions.json`
+2. `.YuCLI/permissions.json`
+
+项目级规则会和用户级规则合并，项目级 `mode` 覆盖用户级。`deny` 优先级最高，`allow` 会跳过 HITL 审批，`ask` 或未命中规则会继续交给 HITL / 默认策略处理。
+
+```json
+{
+  "mode": "default",
+  "allow": ["read_file", "list_dir"],
+  "deny": ["execute_command:rm*", "mcp__danger__*"],
+  "ask": ["write_file", "execute_command", "mcp__*"]
+}
+```
+
+`write_file` 和新建项目会在写入前创建 checkpoint。`/checkpoint` 查看最近快照，`/undo` 恢复最近一次工具写入前状态；它只恢复 YuCLI 工具记录的文件快照，不修改 git 历史。
 
 ## Headless Run
 

@@ -253,4 +253,13 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hooks list").type());
         assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hook list").type());
     }
+
+    @Test
+    void parsesPermissionCheckpointAndUndoCommands() {
+        assertEquals(CliCommandParser.CommandType.PERMISSION_STATUS, CliCommandParser.parse("/permissions").type());
+        assertEquals(CliCommandParser.CommandType.PERMISSION_STATUS, CliCommandParser.parse("/permission list").type());
+        assertEquals(CliCommandParser.CommandType.CHECKPOINT_STATUS, CliCommandParser.parse("/checkpoint").type());
+        assertEquals(CliCommandParser.CommandType.CHECKPOINT_STATUS, CliCommandParser.parse("/checkpoints").type());
+        assertEquals(CliCommandParser.CommandType.UNDO_LAST, CliCommandParser.parse("/undo").type());
+    }
 }

@@ -24,6 +24,9 @@ final class CliCommandParser {
         GRAPH_QUERY,
         CONTEXT_STATUS,
         POLICY_STATUS,
+        PERMISSION_STATUS,
+        CHECKPOINT_STATUS,
+        UNDO_LAST,
         AUDIT_TAIL,
         MCP_LIST,
         MCP_RESTART,
@@ -191,6 +194,19 @@ final class CliCommandParser {
 
         if (trimmed.equalsIgnoreCase("/policy")) {
             return new ParsedCommand(CommandType.POLICY_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/permissions") || trimmed.equalsIgnoreCase("/permission")
+                || trimmed.equalsIgnoreCase("/permissions list") || trimmed.equalsIgnoreCase("/permission list")) {
+            return new ParsedCommand(CommandType.PERMISSION_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/checkpoint") || trimmed.equalsIgnoreCase("/checkpoints")) {
+            return new ParsedCommand(CommandType.CHECKPOINT_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/undo")) {
+            return new ParsedCommand(CommandType.UNDO_LAST, null);
         }
 
         if (trimmed.equalsIgnoreCase("/audit")) {

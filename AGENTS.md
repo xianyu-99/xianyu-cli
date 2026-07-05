@@ -310,10 +310,12 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 - `CommandGuard`：`execute_command` 进入 HITL 之前的 fast-fail 黑名单（sudo / rm -rf 全盘 / mkfs / dd of=/dev / fork bomb / curl|sh / find / / chmod 777 / / shutdown）。**定位是辅助 HITL，不是主防线**——黑名单永远列不全（base64 解码后执行、`eval`、写 `~/.bashrc` 持久化等都漏），它只是减少 HITL 弹窗骚扰。真正的安全责任在 HITL 审批
 - `ResourceLimit` 类约束：`write_file` 单文件 5MB；`execute_command` 60 秒超时 + 8KB 输出截断（与第 7 期共用）
 - `AuditLog`：危险工具（`write_file` / `execute_command` / `create_project`）调用一律落一行 JSONL 到 `~/.YuCLI/audit/audit-YYYY-MM-DD.jsonl`，字段：`timestamp / tool / args / outcome (allow|deny|error) / reason / approver (hitl|policy|none) / durationMs`。审计写入失败仅 stderr 提示，不影响主流程
+- `PermissionProfile`：读取 `~/.YuCLI/permissions.json` 和 `.YuCLI/permissions.json`，支持 `allow` / `deny` / `ask` 规则；`deny` 优先级最高，`allow` 会跳过 HITL，`ask` 或未命中规则继续交给 HITL / 默认策略处理；matcher 支持精确工具名、`*`、前缀通配和 `tool:argument-substring`
 - 拦截出口：`PathGuard` / `CommandGuard` / 文件大小限制 都抛 `PolicyException`（`RuntimeException` 子类），由 `ToolRegistry.executeTool` 统一 catch、写 deny 审计、返回 `🛡️ 策略拒绝: ...`
-- 与 HITL 协同顺序：`HitlToolRegistry` → `ToolRegistry` → 策略层。HITL 拒绝/跳过写 `approver=hitl` 审计；HITL 通过后策略层仍校验，**用户无法批准策略拒绝的请求**
+- 与 HITL 协同顺序：`HitlToolRegistry` 先用 PermissionProfile 对原始参数做预判（显式 deny 不弹 HITL，显式 allow 跳过 HITL）；需要审批时再进入 HITL；审批通过后进入 `ToolRegistry`，`PreToolUse` 可修改参数，随后再次检查 PermissionProfile，再进入策略层和真实工具。HITL 拒绝/跳过写 `approver=hitl` 审计；Permission/策略拒绝写 `approver=policy` 审计；**用户无法批准策略拒绝的请求**
 - CLI 命令：
   - `/policy`：查看安全策略状态（项目根 / 危险工具 / 黑名单 / 审计目录）
+  - `/permissions`：查看当前权限 Profile 规则和来源
   - `/audit [N]`：看今日最近 N 条审计（默认 10，最大 100）
 - 提示词联动：`Agent` / `PlanExecuteAgent` / `SubAgent` 三处都告知 LLM 安全策略硬规则与 `🛡️ 策略拒绝` 输出格式，避免 LLM 原样重试同一条违规请求
 - **不做沙箱的取舍**：本地 Agent CLI（参考 Claude Code / Cursor / Aider）默认都不做容器/VM 沙箱——沙箱削弱 Agent 能力（不能装依赖、不能跑全局命令）、给虚假安全感（容器逃逸真实存在）、体验更差。生产级 Agent 沙箱实际是 microVM-level（Devin / Modal / Anthropic Computer Use 用 Firecracker / gVisor），不是 Docker-level。想做隔离请参考 ROADMAP 末尾「Pro 升级版本」
@@ -352,6 +354,17 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 - HITL 与 hook 的协同顺序：`HitlToolRegistry` 先处理人工审批；审批通过后进入 `ToolRegistry`，再执行 `PreToolUse`、策略层、真实工具、`PostToolUse`
 - 当前不支持 HTTP hook、异步 hook、LLM prompt hook；这些属于后续扩展
+
+#### 7.3 Checkpoint / Undo
+
+- 主模块在 `src/main/java/com/yucli/checkpoint/`
+- CLI / headless 主入口会显式启用 checkpoint；裸 `new ToolRegistry()` 默认不写 checkpoint，避免嵌入式调用和单元测试污染 `~/.YuCLI`
+- 默认持久化位置：`~/.YuCLI/checkpoints/<project-hash>/`
+- `write_file` 和新建项目会在真实写入前调用 `CheckpointManager.checkpointBeforeWrite(...)`
+- 如果目标原本存在且是普通文件，checkpoint 会复制原内容；如果目标原本不存在，checkpoint 会记录 missing，`/undo` 时删除该目标
+- `/checkpoint`：查看最近 checkpoint
+- `/undo`：恢复最近一次工具写入前状态，并删除对应 checkpoint 元数据；这是 YuCLI 工具层局部撤销，不修改 git 历史
+- 当前不支持对已存在目录做完整目录快照；`create_project` 的可回滚路径主要覆盖新目录创建
 
 ### 8. 异步执行与并行工具调用
 
@@ -591,6 +604,9 @@ src/main/java/com/yucli
 │   ├── HookDecision.java
 │   ├── HookEvent.java
 │   └── HookCommandExecutor.java
+├── checkpoint/
+│   ├── CheckpointManager.java
+│   └── CheckpointEntry.java
 ├── runtime/
 │   ├── CancellationContext.java
 │   ├── CancellationToken.java
@@ -616,6 +632,9 @@ src/main/java/com/yucli
     ├── PolicyException.java
     ├── PathGuard.java
     ├── CommandGuard.java
+    ├── PermissionProfile.java
+    ├── PermissionProfileDecision.java
+    ├── PermissionProfileLoader.java
     └── AuditLog.java
 ```
 
@@ -646,10 +665,11 @@ src/main/java/com/yucli
 - `HitlToolRegistryTest`
 - `TerminalHitlHandlerTest`
 - `HookDefinitionTest`、`HookConfigLoaderTest`、`HookManagerDecisionTest`、`ToolRegistryHookTest`
+- `CheckpointManagerTest`
 - `HeadlessRunnerTest`
 - `ToolRegistryTest`
 - `McpSchemaSanitizerTest`、`McpConfigLoaderTest`、`JsonRpcClientTest`、`McpToolBridgeTest`、`McpResourceCacheTest`、`AtMentionParserTest`、`AtMentionExpanderTest`、`AtMentionCompleterTest`、`NotificationRouterTest`
-- `PathGuardTest`、`CommandGuardTest`、`AuditLogTest`
+- `PathGuardTest`、`CommandGuardTest`、`AuditLogTest`、`PermissionProfileTest`、`PermissionProfileLoaderTest`
 - `TokenStoreTest`、`McpOAuthClientTest`
 - `PluginManagerTest`
 - `SessionManagerTest`
@@ -808,7 +828,7 @@ src/main/java/com/yucli
 
 ### 2. 改命令入口，要联动这几处
 
-如果修改 `/plan`、`/team`、`/loop`、`/eval`、`/agents`、`/hooks`、`run`、`/cancel`、`/hitl`、`/mcp`、`/policy`、`/audit`、`/browser`、`/skill`、`/tui`、`/clear`、`/memory`、`/save`、`/index`、`/search`、`/graph`、`/exit`、`/plugin`、`/session`、`/resume` 或输入解析：
+如果修改 `/plan`、`/team`、`/loop`、`/eval`、`/agents`、`/hooks`、`run`、`/cancel`、`/hitl`、`/mcp`、`/policy`、`/permissions`、`/checkpoint`、`/undo`、`/audit`、`/browser`、`/skill`、`/tui`、`/clear`、`/memory`、`/save`、`/index`、`/search`、`/graph`、`/exit`、`/plugin`、`/session`、`/resume` 或输入解析：
 
 - `Main.java`
 - `CliCommandParser.java`
@@ -887,18 +907,19 @@ src/main/java/com/yucli
 - `README.md`
 - `AGENTS.md`
 
-### 5.4 改 HITL 增强（路径围栏 / 命令黑名单 / 审计 / 资源上限），要联动这几处
+### 5.4 改 HITL 增强（路径围栏 / 命令黑名单 / 审计 / 权限 Profile / checkpoint），要联动这几处
 
-如果新增黑名单规则、调整 PathGuard 行为、改 AuditLog 字段、或加新的资源上限：
+如果新增黑名单规则、调整 PathGuard 行为、改 AuditLog 字段、调整 PermissionProfile 规则、或修改 checkpoint/undo 行为：
 
 - `src/main/java/com/yucli/policy/` 下相关文件
+- `src/main/java/com/yucli/checkpoint/` 下相关文件
 - `ToolRegistry.java`：执行入口与拦截路径
 - `HitlToolRegistry.java`：HITL 审批与策略层审计的协同
 - `Agent.java` / `PlanExecuteAgent.java` / `SubAgent.java` 的系统提示词：让 LLM 知道新增规则与 `🛡️ 策略拒绝` 输出格式
-- `Main.java`：如果新增 `/policy` 子命令或 `/audit` 行为变化
+- `Main.java` / `CliCommandParser.java`：如果新增 `/policy`、`/permissions`、`/checkpoint`、`/undo`、`/audit` 行为变化
 - `.env.example`：新增的环境变量示例（如 `YuCLI_AUDIT_DIR`）
 - `README.md` 与 `AGENTS.md`：HITL 增强子段 + 命令列表
-- 至少补一个对应的单元测试（`PathGuardTest` / `CommandGuardTest` / `AuditLogTest`）
+- 至少补一个对应的单元测试（`PathGuardTest` / `CommandGuardTest` / `AuditLogTest` / `PermissionProfileTest` / `CheckpointManagerTest`）
 
 ### 5.5 改 MCP 协议或 server 管理，要联动这几处
 

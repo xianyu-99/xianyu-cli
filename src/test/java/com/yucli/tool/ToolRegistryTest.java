@@ -1,6 +1,7 @@
 package com.yucli.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.yucli.policy.PermissionProfile;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -59,6 +60,55 @@ class ToolRegistryTest {
             assertFalse(Files.exists(tempDir.resolve("bad-project")));
         } finally {
             try { Files.deleteIfExists(tempDir.resolve("bad-project")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void permissionProfileDenyBlocksToolExecution() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+            registry.setPermissionProfile(new PermissionProfile(
+                    "default",
+                    List.of(),
+                    List.of("write_file"),
+                    List.of()
+            ));
+
+            String result = registry.executeTool("write_file",
+                    "{\"path\":\"blocked.txt\",\"content\":\"x\"}");
+
+            assertTrue(result.startsWith("[Permission]"), "实际输出: " + result);
+            assertFalse(Files.exists(tempDir.resolve("blocked.txt")));
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("blocked.txt")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void enabledCheckpointingRestoresPreviousWrite() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            Path target = tempDir.resolve("note.txt");
+            Files.writeString(target, "old");
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+            registry.enableCheckpointing(tempDir.resolve("checkpoints"));
+
+            String writeResult = registry.executeTool("write_file",
+                    "{\"path\":\"note.txt\",\"content\":\"new\"}");
+            assertTrue(writeResult.contains("checkpoint:"), "实际输出: " + writeResult);
+            assertEquals("new", Files.readString(target));
+
+            String undoResult = registry.restoreLastCheckpoint();
+
+            assertTrue(undoResult.contains("Restored checkpoint"), "实际输出: " + undoResult);
+            assertEquals("old", Files.readString(target));
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("note.txt")); } catch (Exception ignored) {}
             try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
         }
     }

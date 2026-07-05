@@ -2,9 +2,8 @@ package com.yucli.hitl;
 
 import com.yucli.hook.HookManager;
 import com.yucli.policy.AuditLog;
+import com.yucli.policy.PermissionProfileDecision;
 import com.yucli.tool.ToolRegistry;
-
-import java.util.concurrent.TimeUnit;
 
 /**
  * HITL 工具注册表 - 在危险工具调用前插入人工审批
@@ -32,12 +31,20 @@ public class HitlToolRegistry extends ToolRegistry {
 
     @Override
     public String executeTool(String name, String argumentsJson) {
+        long start = System.nanoTime();
+        PermissionProfileDecision permissionDecision = evaluatePermission(name, argumentsJson);
+        if (permissionDecision.isDeny()) {
+            return denyByPermission(name, argumentsJson, permissionDecision, shouldAudit(name), start);
+        }
+        if (permissionDecision.isAllow()) {
+            return super.executeTool(name, argumentsJson);
+        }
+
         // HITL 未启用或该工具不需要审批，直接执行
         if (!hitlHandler.isEnabled() || !ApprovalPolicy.requiresApproval(name)) {
             return super.executeTool(name, argumentsJson);
         }
 
-        long start = System.nanoTime();
         ApprovalRequest request = ApprovalRequest.of(name, argumentsJson, null);
         ApprovalResult result = hitlHandler.requestApproval(request);
 
@@ -59,10 +66,6 @@ public class HitlToolRegistry extends ToolRegistry {
         // 批准（含修改参数）- 使用 effectiveArguments 获取最终参数；父类 executeTool 会负责 allow audit
         String effectiveArgs = result.effectiveArguments(argumentsJson);
         return super.executeTool(name, effectiveArgs);
-    }
-
-    private static long elapsedMillis(long startNanos) {
-        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
     }
 
     public HitlHandler getHitlHandler() {
