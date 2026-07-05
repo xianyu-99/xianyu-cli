@@ -1,7 +1,10 @@
 package com.yucli.memory;
 
+import com.yucli.hook.HookManager;
 import com.yucli.llm.LlmClient;
+import com.yucli.session.SessionMessage;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -29,6 +32,7 @@ public class MemoryManager {
     private final MemoryRetriever retriever;
     private final TokenBudget tokenBudget;
     private final ContextMode contextMode;
+    private HookManager hookManager = HookManager.disabled();
 
     public MemoryManager(LlmClient llmClient) {
         this(llmClient, 32768, 200000, null);
@@ -61,6 +65,10 @@ public class MemoryManager {
 
     public void setLlmClient(LlmClient llmClient) {
         this.compressor.setLlmClient(llmClient);
+    }
+
+    public void setHookManager(HookManager hookManager) {
+        this.hookManager = hookManager == null ? HookManager.disabled() : hookManager;
     }
 
     /**
@@ -115,6 +123,18 @@ public class MemoryManager {
         compressIfNeeded();
     }
 
+    public void addCompressedSummary(String content, int tokenCount) {
+        String cleanContent = content.startsWith("[compressed] ") ? content.substring(12) : content;
+        MemoryEntry entry = new MemoryEntry(
+                "summary-" + UUID.randomUUID().toString().substring(0, 8),
+                cleanContent,
+                MemoryEntry.MemoryType.SUMMARY,
+                Map.of("source", "session-restore"),
+                tokenCount > 0 ? tokenCount : MemoryEntry.estimateTokens(cleanContent)
+        );
+        shortTermMemory.storeCompressedSummary(entry);
+    }
+
     /**
      * 存储关键事实到长期记忆
      */
@@ -163,6 +183,13 @@ public class MemoryManager {
         if (!tokenBudget.needsCompression(shortTermMemory)) {
             return false;
         }
+        hookManager.runPreCompact(
+                "short_term",
+                shortTermMemory.size(),
+                shortTermMemory.getTokenCount(),
+                shortTermMemory.getUsageRatio(),
+                contextMode.name().toLowerCase(),
+                "token_budget");
         System.out.println("📦 短期记忆接近预算上限，触发压缩...");
         String summary = compressor.compress(shortTermMemory);
         if (summary != null) {
@@ -197,6 +224,54 @@ public class MemoryManager {
 
     public ContextMode getContextMode() {
         return contextMode;
+    }
+
+    public List<SessionMessage> exportToSession() {
+        List<SessionMessage> messages = new ArrayList<>();
+        for (MemoryEntry entry : shortTermMemory.getAll()) {
+            SessionMessage msg = new SessionMessage();
+            msg.setContent(entry.getContent());
+            msg.setTimestamp(entry.getTimestamp().toEpochMilli());
+            msg.setTokenCount(entry.getTokenCount());
+
+            Map<String, String> meta = entry.getMetadata();
+            String source = meta.getOrDefault("source", "unknown");
+            msg.setRole(switch (source) {
+                case "user" -> "user";
+                case "assistant" -> "assistant";
+                case "tool" -> "tool";
+                default -> "system";
+            });
+            if ("tool".equals(source)) {
+                msg.setToolName(meta.get("toolName"));
+            }
+            messages.add(msg);
+        }
+        for (MemoryEntry entry : shortTermMemory.getCompressedSummaries()) {
+            SessionMessage msg = new SessionMessage();
+            msg.setRole("system");
+            msg.setContent("[compressed] " + entry.getContent());
+            msg.setTimestamp(entry.getTimestamp().toEpochMilli());
+            msg.setTokenCount(entry.getTokenCount());
+            messages.add(msg);
+        }
+        return messages;
+    }
+
+    public void loadFromSession(com.yucli.session.Session session) {
+        shortTermMemory.clear();
+        if (session.getMessages() == null) return;
+        for (SessionMessage msg : session.getMessages()) {
+            if ("user".equals(msg.getRole())) {
+                addUserMessage(msg.getContent());
+            } else if ("assistant".equals(msg.getRole())) {
+                addAssistantMessage(msg.getContent());
+            } else if ("tool".equals(msg.getRole()) && msg.getToolName() != null) {
+                addToolResult(msg.getToolName(), msg.getContent());
+            } else if ("system".equals(msg.getRole())) {
+                addCompressedSummary(msg.getContent(), msg.getTokenCount());
+            }
+        }
     }
 
     // Getter

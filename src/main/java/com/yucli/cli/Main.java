@@ -1,9 +1,15 @@
 package com.yucli.cli;
 
 import com.yucli.agent.Agent;
+import com.yucli.agent.AgentBudget;
 import com.yucli.agent.AgentOrchestrator;
 import com.yucli.agent.PlanExecuteAgent;
+import com.yucli.agent.config.AgentProfile;
+import com.yucli.agent.config.AgentProfileLoader;
+import com.yucli.ProductInfo;
 import com.yucli.config.YuCLIConfig;
+import com.yucli.hook.HookDecision;
+import com.yucli.hook.HookManager;
 import com.yucli.hitl.HitlToolRegistry;
 import com.yucli.hitl.TerminalHitlHandler;
 import com.yucli.llm.LlmClient;
@@ -15,12 +21,26 @@ import com.yucli.plan.ExecutionPlan;
 import com.yucli.rag.CodeIndex;
 import com.yucli.hitl.ApprovalPolicy;
 import com.yucli.policy.AuditLog;
+import com.yucli.policy.PermissionProfile;
+import com.yucli.policy.PermissionProfileLoader;
 import com.yucli.rag.CodeRetriever;
 import com.yucli.rag.CodeRelation;
 import com.yucli.rag.SearchResultFormatter;
+import com.yucli.plugin.PluginInfo;
+import com.yucli.plugin.PluginManager;
+import com.yucli.plugin.PluginState;
+import com.yucli.plugin.PluginTemplateGenerator;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.runtime.CancellationToken;
+import com.yucli.runtime.headless.HeadlessRunMode;
+import com.yucli.runtime.headless.HeadlessRunRequest;
+import com.yucli.runtime.headless.HeadlessRunResult;
+import com.yucli.runtime.headless.HeadlessRunner;
+import com.yucli.runtime.headless.JsonlEventWriter;
+import com.yucli.session.Session;
+import com.yucli.session.SessionManager;
 import com.yucli.tui.TuiApplication;
+import com.yucli.util.AnsiStyle;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.terminal.Attributes;
@@ -33,12 +53,16 @@ import org.jline.reader.UserInterruptException;
 import org.jline.utils.NonBlockingReader;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -48,13 +72,17 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * YuCLI v15.0.0 - MCP-Native Agent CLI
+ * YuCLI - MCP-Native Agent CLI
  * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换、MCP、浏览器自动化、Skill 系统
- * 第 15 期新增：Skill 加载机制、web-access 内置 Skill、Jina Reader fallback、/skill CLI 命令
+ * 包含 Skill 加载机制、web-access 内置 Skill、Jina Reader fallback、/skill CLI 命令
  * HITL 增强：路径围栏（PathGuard）、命令快速拒绝（CommandGuard）、操作审计链（AuditLog）—— 见 com.yucli.policy
  */
 public class Main {
-    private static final String VERSION = "16.0.0";
+    private static final String VERSION = ProductInfo.VERSION;
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_BANNER_CYAN = "\u001B[1;96m";
+    private static final String ANSI_READY_GREEN = "\u001B[32m";
+    private static final String ANSI_DIM = "\u001B[2m";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "YuCLI.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "YuCLI.log.level";
@@ -115,6 +143,14 @@ public class Main {
     }
 
     public static void main(String[] args) {
+        if (isHeadlessRun(args)) {
+            int exitCode = runHeadless(args);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
+
         printBanner();
         configureLogging();
 
@@ -122,16 +158,25 @@ public class Main {
         LlmClient llmClient = LlmClientFactory.createFromConfig(config);
         if (llmClient == null) {
             System.err.println("❌ 错误: 未找到可用的 API Key");
-            System.err.println("请在 .env 文件中添加 GLM_API_KEY 或 DEEPSEEK_API_KEY");
+            System.err.println("请在 .env 文件中添加 ANTHROPIC_API_KEY、GLM_API_KEY、DEEPSEEK_API_KEY、QWEN_API_KEY 或 OPENAI_API_KEY");
             System.exit(1);
         }
 
-        System.out.println("✅ 已加载模型: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")\n");
+        System.out.println("✅ 已加载模型: " + llmClient.getModelName() + " (" + formatProviderDetails(llmClient) + ")\n");
 
         try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
             TerminalHitlHandler hitlHandler = new TerminalHitlHandler(false);
-            HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(hitlHandler);
+            Path projectDir = Path.of(".").toAbsolutePath().normalize();
+            HookManager hookManager = HookManager.loadDefault(projectDir);
+            hookManager.setLlmClient(llmClient);
+            HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(
+                    hitlHandler,
+                    hookManager);
+            hitlToolRegistry.setProjectPath(projectDir.toString());
+            hitlToolRegistry.setPermissionProfile(loadPermissionProfile(projectDir));
+            hitlToolRegistry.enableCheckpointing();
             McpServerManager mcpServerManager = new McpServerManager(hitlToolRegistry, Path.of("."));
+            mcpServerManager.setLlmClient(llmClient);
             try {
                 mcpServerManager.loadConfiguredServers();
                 mcpServerManager.startAll();
@@ -139,8 +184,11 @@ public class Main {
                 System.out.println(mcpServerManager.startupSummary());
                 System.out.println();
             } catch (Exception e) {
-                System.out.println("⚠️ MCP 初始化失败: " + e.getMessage());
-                System.out.println("   可检查 ~/.YuCLI/mcp.json 或 .YuCLI/mcp.json\n");
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                System.out.println("⚠️ MCP 初始化失败: " + root.getClass().getSimpleName() + ": " + root.getMessage());
+                System.out.println("   可检查 ~/.YuCLI/mcp.json 或 .YuCLI/mcp.json");
+                e.printStackTrace(System.err);
             }
             LineReader lineReader = LineReaderBuilder.builder()
                     .terminal(terminal)
@@ -152,12 +200,32 @@ public class Main {
             Agent reactAgent = new Agent(llmClient, hitlToolRegistry);
             reactAgent.setMcpServerManager(mcpServerManager);
 
-            com.yucli.skill.SkillRegistry skillRegistry = new com.yucli.skill.SkillRegistry();
-            Path userSkillsDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
-            if (Files.isDirectory(userSkillsDir)) {
-                skillRegistry.loadUserSkills(userSkillsDir);
+            PluginManager pluginManager = new PluginManager(hitlToolRegistry);
+            try {
+                pluginManager.loadAll();
+                int pluginCount = pluginManager.listPlugins().size();
+                if (pluginCount > 0) {
+                    System.out.println("🔌 已加载 " + pluginCount + " 个插件\n");
+                }
+            } catch (Exception e) {
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                System.out.println("⚠️ 插件系统初始化失败: " + root.getClass().getSimpleName() + ": " + root.getMessage() + "\n");
             }
+
+            com.yucli.skill.SkillRegistry skillRegistry = new com.yucli.skill.SkillRegistry();
+            Path userSkillsDir = userSkillsDir();
+            skillRegistry.loadUserSkills(userSkillsDir);
             reactAgent.setSkillRegistry(skillRegistry);
+
+            SessionManager sessionManager = new SessionManager(reactAgent.getMemoryManager());
+            Runtime.getRuntime().addShutdownHook(new Thread(sessionManager::saveOnExit, "YuCLI-session-shutdown"));
+
+            Session unclosedSession = sessionManager.findMostRecentUnclosed();
+            if (unclosedSession != null) {
+                System.out.println("💡 发现未关闭的会话 " + unclosedSession.getShortId() + "，输入 /resume 恢复");
+            }
+
             System.out.println("🔄 使用 ReAct 模式\n");
             boolean nextTaskUsePlanMode = false;
             boolean nextTaskUseTeamMode = false;
@@ -196,13 +264,14 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /tui /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/model /loop /eval /agents /hooks /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /permissions /checkpoint /undo /audit /browser /skill /plugin /plugin template /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
                         continue;
                     }
                     case TUI_LAUNCH -> {
                         System.out.println("🖥️ 启动 TUI 模式...\n");
-                        TuiApplication.launch(reactAgent);
-                        System.out.println("👤 已退出 TUI，回到 CLI 模式。\n");
+                        if (TuiApplication.launch(reactAgent)) {
+                            System.out.println("👤 已退出 TUI，回到 CLI 模式。\n");
+                        }
                         continue;
                     }
                     case EXIT -> {
@@ -228,6 +297,22 @@ public class Main {
                     case BROWSER_STATUS -> {
                         System.out.println(reactAgent.getToolRegistry().getBrowserStatus());
                         System.out.println();
+                        continue;
+                    }
+                    case LOOP_STATUS -> {
+                        printLoopStatus(llmClient);
+                        continue;
+                    }
+                    case EVAL_INFO -> {
+                        printEvalInfo(command.payload());
+                        continue;
+                    }
+                    case AGENT_LIST -> {
+                        printAgentProfiles(projectDir);
+                        continue;
+                    }
+                    case HOOK_STATUS -> {
+                        printHookStatus(hookManager.status());
                         continue;
                     }
                     case SKILL_LIST -> {
@@ -257,12 +342,193 @@ public class Main {
                     }
                     case SKILL_RELOAD -> {
                         reactAgent.getSkillRegistry().reload();
-                        Path reloadDir = Path.of(System.getProperty("user.home"), ".yucli", "skills");
-                        if (Files.isDirectory(reloadDir)) {
-                            reactAgent.getSkillRegistry().loadUserSkills(reloadDir);
-                        }
                         System.out.println("🔄 Skill 已重新加载\n");
                         System.out.println(reactAgent.getSkillRegistry().getStatusText());
+                        System.out.println();
+                        continue;
+                    }
+                    case PLUGIN_LIST -> {
+                        java.util.List<PluginInfo> pluginList = pluginManager.listPlugins();
+                        if (pluginList.isEmpty()) {
+                            System.out.println("📭 当前没有已加载的插件");
+                            System.out.println("   将 .jar 文件放入 ~/.YuCLI/plugins/ 目录后执行 /plugin reload\n");
+                        } else {
+                            System.out.println("🔌 插件列表 (" + pluginList.size() + " 个):");
+                            for (PluginInfo info : pluginList) {
+                                String stateIcon = switch (info.state()) {
+                                    case ENABLED -> "✅";
+                                    case DISABLED -> "❌";
+                                    case ERROR -> "⚠️";
+                                    case LOADED -> "⏳";
+                                };
+                                System.out.printf("   %s %s v%s [%s]%n",
+                                        stateIcon, info.instance().name(),
+                                        info.instance().version(), info.state());
+                                System.out.println("      " + info.instance().description());
+                            }
+                            System.out.println();
+                        }
+                        continue;
+                    }
+                    case PLUGIN_ENABLE -> {
+                        String pluginName = command.payload();
+                        if (pluginName == null || pluginName.isEmpty()) {
+                            System.out.println("❌ 请提供插件名称，例如 /plugin enable my-plugin\n");
+                        } else {
+                            try {
+                                pluginManager.enablePlugin(pluginName);
+                                System.out.println("✅ 插件 '" + pluginName + "' 已启用\n");
+                            } catch (Exception e) {
+                                System.out.println("❌ 启用插件失败: " + e.getMessage() + "\n");
+                            }
+                        }
+                        continue;
+                    }
+                    case PLUGIN_DISABLE -> {
+                        String pluginName = command.payload();
+                        if (pluginName == null || pluginName.isEmpty()) {
+                            System.out.println("❌ 请提供插件名称，例如 /plugin disable my-plugin\n");
+                        } else {
+                            try {
+                                pluginManager.disablePlugin(pluginName);
+                                System.out.println("❌ 插件 '" + pluginName + "' 已禁用\n");
+                            } catch (Exception e) {
+                                System.out.println("❌ 禁用插件失败: " + e.getMessage() + "\n");
+                            }
+                        }
+                        continue;
+                    }
+                    case PLUGIN_RELOAD -> {
+                        pluginManager.reloadAll();
+                        System.out.println("🔄 插件已重新加载");
+                        java.util.List<PluginInfo> reloadedPlugins = pluginManager.listPlugins();
+                        if (reloadedPlugins.isEmpty()) {
+                            System.out.println("   没有找到插件，将 .jar 文件放入 ~/.YuCLI/plugins/ 目录\n");
+                        } else {
+                            System.out.println("   已加载 " + reloadedPlugins.size() + " 个插件\n");
+                        }
+                        continue;
+                    }
+                    case PLUGIN_TEMPLATE -> {
+                        String pluginName = command.payload();
+                        if (pluginName == null || pluginName.isEmpty()) {
+                            System.out.println("Usage: /plugin template <name>\n");
+                        } else {
+                            try {
+                                PluginTemplateGenerator.GeneratedTemplate generated =
+                                        PluginTemplateGenerator.generate(pluginName, Path.of(System.getProperty("user.dir")));
+                                System.out.println("Generated plugin template: " + generated.projectDir());
+                                System.out.println("Plugin id: " + generated.pluginId());
+                                System.out.println("Build with: mvn -q package");
+                                System.out.println("Install jar to: ~/.YuCLI/plugins/");
+                                System.out.println();
+                            } catch (Exception e) {
+                                System.out.println("Failed to generate plugin template: " + e.getMessage() + "\n");
+                            }
+                        }
+                        continue;
+                    }
+                    case SESSION_LIST -> {
+                        java.util.List<Session> sessions = sessionManager.listSessions();
+                        if (sessions.isEmpty()) {
+                            System.out.println("📭 没有已保存的会话\n");
+                        } else {
+                            System.out.println("📋 会话列表 (" + sessions.size() + " 个):");
+                            for (Session s : sessions) {
+                                String summary = s.getTaskSummary() != null ? s.getTaskSummary() : "(无摘要)";
+                                if (summary.length() > 40) summary = summary.substring(0, 40) + "...";
+                                System.out.printf("   %s  %s  %d msgs  %s%n",
+                                        s.getShortId(),
+                                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(s.getUpdatedAt())),
+                                        s.getMessages().size(),
+                                        summary);
+                            }
+                            System.out.println();
+                        }
+                        continue;
+                    }
+                    case SESSION_SAVE -> {
+                        String saveName = command.payload();
+                        Session session = sessionManager.getCurrentSession();
+                        if (session == null) {
+                            session = sessionManager.createSession();
+                        }
+                        if (saveName != null && !saveName.isEmpty()) {
+                            session.setTaskSummary(saveName);
+                        }
+                        session.setModelName(llmClient.getModelName());
+                        session.setProvider(llmClient.getProviderName());
+                        sessionManager.autoSave();
+                        System.out.println("💾 会话已保存: " + session.getShortId() + "\n");
+                        continue;
+                    }
+                    case SESSION_LOAD -> {
+                        String loadId = command.payload();
+                        if (loadId == null || loadId.isEmpty()) {
+                            System.out.println("❌ 请提供会话 ID，例如 /session load abc12345\n");
+                            continue;
+                        }
+                        Session loaded = sessionManager.findSessionByPartialId(loadId);
+                        if (loaded == null) {
+                            loaded = sessionManager.loadSession(loadId);
+                        }
+                        if (loaded == null) {
+                            System.out.println("❌ 未找到会话: " + loadId + "\n");
+                            continue;
+                        }
+                        sessionManager.setCurrentSession(loaded);
+                        reactAgent.restoreSession(loaded);
+                        System.out.println("📂 已加载会话: " + loaded.getShortId() +
+                                " (" + loaded.getMessages().size() + " 条消息)\n");
+                        continue;
+                    }
+                    case SESSION_DELETE -> {
+                        String deleteId = command.payload();
+                        if (deleteId == null || deleteId.isEmpty()) {
+                            System.out.println("❌ 请提供会话 ID，例如 /session delete abc12345\n");
+                            continue;
+                        }
+                        Session toDelete = sessionManager.findSessionByPartialId(deleteId);
+                        if (toDelete != null) deleteId = toDelete.getSessionId();
+                        if (sessionManager.deleteSession(deleteId)) {
+                            System.out.println("🗑️ 已删除会话: " + deleteId + "\n");
+                        } else {
+                            System.out.println("❌ 未找到会话: " + deleteId + "\n");
+                        }
+                        continue;
+                    }
+                    case SESSION_EXPORT -> {
+                        String exportPayload = command.payload();
+                        if (exportPayload == null || exportPayload.isEmpty()) {
+                            System.out.println("❌ 用法: /session export <id> [path]\n");
+                            continue;
+                        }
+                        String[] parts = exportPayload.split("\\s+", 2);
+                        String exportId = parts[0];
+                        String exportPath = parts.length > 1 ? parts[1] : ".";
+                        Session exportSession = sessionManager.findSessionByPartialId(exportId);
+                        if (exportSession != null) exportId = exportSession.getSessionId();
+                        try {
+                            sessionManager.exportSession(exportId, exportPath);
+                            System.out.println("📤 会话已导出: " + exportId + " -> " + exportPath + "\n");
+                        } catch (Exception e) {
+                            System.out.println("❌ 导出失败: " + e.getMessage() + "\n");
+                        }
+                        continue;
+                    }
+                    case RESUME -> {
+                        Session recent = sessionManager.findMostRecentUnclosed();
+                        if (recent == null) {
+                            System.out.println("📭 没有可恢复的会话\n");
+                            continue;
+                        }
+                        sessionManager.setCurrentSession(recent);
+                        reactAgent.restoreSession(recent);
+                        System.out.println("🔄 已恢复会话: " + recent.getShortId() +
+                                " (" + recent.getMessages().size() + " 条消息)");
+                        if (recent.getTaskSummary() != null) {
+                            System.out.println("   摘要: " + recent.getTaskSummary());
+                        }
                         System.out.println();
                         continue;
                     }
@@ -309,10 +575,13 @@ public class Main {
                     case SWITCH_MODEL -> {
                         String provider = command.payload();
                         if (provider == null || provider.isEmpty()) {
-                            System.out.println("🤖 当前模型: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")");
-                            System.out.println("   可用模型：glm, deepseek");
-                            System.out.println("   /model glm     - 切换到 GLM-5.1");
-                            System.out.println("   /model deepseek - 切换到 DeepSeek V4\n");
+                            System.out.println("🤖 当前模型: " + llmClient.getModelName() + " (" + formatProviderDetails(llmClient) + ")");
+                            System.out.println("   可用模型：anthropic, deepseek, glm, qwen, openai");
+                            System.out.println("   /model anthropic - 切换到 Anthropic Messages 兼容接口");
+                            System.out.println("   /model deepseek  - 切换到 DeepSeek OpenAI 兼容接口");
+                            System.out.println("   /model glm       - 切换到 GLM OpenAI 兼容接口");
+                            System.out.println("   /model qwen      - 切换到 Qwen OpenAI 兼容接口");
+                            System.out.println("   /model openai    - 切换到通用 OpenAI 兼容接口\n");
                         } else {
                             LlmClient newClient = LlmClientFactory.create(provider, config);
                             if (newClient == null) {
@@ -322,7 +591,8 @@ public class Main {
                                 config.setDefaultProvider(provider);
                                 config.save();
                                 reactAgent.setLlmClient(llmClient);
-                                System.out.println("✅ 已切换到: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")");
+                                hookManager.setLlmClient(llmClient);
+                                System.out.println("✅ 已切换到: " + llmClient.getModelName() + " (" + formatProviderDetails(llmClient) + ")");
                                 System.out.println("   对话上下文已保留，使用 /clear 可清空\n");
                             }
                         }
@@ -347,6 +617,18 @@ public class Main {
                     }
                     case POLICY_STATUS -> {
                         printPolicyStatus(reactAgent);
+                        continue;
+                    }
+                    case PERMISSION_STATUS -> {
+                        printPermissionStatus(reactAgent);
+                        continue;
+                    }
+                    case CHECKPOINT_STATUS -> {
+                        printCheckpointStatus(reactAgent);
+                        continue;
+                    }
+                    case UNDO_LAST -> {
+                        printUndoResult(reactAgent);
                         continue;
                     }
                     case AUDIT_TAIL -> {
@@ -380,6 +662,18 @@ public class Main {
                     }
                     case MCP_PROMPTS -> {
                         printMcpCommandResult(mcpServerManager.prompts(command.payload()));
+                        continue;
+                    }
+                    case MCP_AUTH -> {
+                        printMcpCommandResult(mcpServerManager.authServer(command.payload()));
+                        continue;
+                    }
+                    case MCP_AUTH_STATUS -> {
+                        printMcpCommandResult(mcpServerManager.authStatus());
+                        continue;
+                    }
+                    case MCP_AUTH_REVOKE -> {
+                        printMcpCommandResult(mcpServerManager.authRevoke(command.payload()));
                         continue;
                     }
                     case INDEX_CODE -> {
@@ -457,6 +751,21 @@ public class Main {
                 }
 
                 // 运行 Agent
+                String runMode = resolveRunMode(nextTaskUsePlanMode, nextTaskUseTeamMode, command.type());
+                HookDecision promptDecision = hookManager.runUserPromptSubmit(
+                        input,
+                        runMode,
+                        "cli",
+                        command.type().name());
+                if (!promptDecision.allowed()) {
+                    System.out.println("[Hook] UserPromptSubmit 拒绝: " + promptDecision.reason() + "\n");
+                    continue;
+                }
+                input = promptFromDecision(promptDecision, input).trim();
+                if (input.isEmpty()) {
+                    System.out.println("[Hook] UserPromptSubmit 将输入改为空，已跳过本次任务。\n");
+                    continue;
+                }
                 input = mentionExpander.expand(input);
                 System.out.println();
                 final String taskInput = input;
@@ -470,7 +779,7 @@ public class Main {
                 } else if (nextTaskUseTeamMode || command.type() == CliCommandParser.CommandType.SWITCH_TEAM) {
                     LlmClient activeClient = llmClient;
                     runTask = () -> {
-                        AgentOrchestrator orchestrator = createTeamAgent(activeClient, reactAgent);
+                        AgentOrchestrator orchestrator = createTeamAgent(activeClient, reactAgent, projectDir);
                         return orchestrator.run(taskInput);
                     };
                 } else {
@@ -509,9 +818,232 @@ public class Main {
         return createPlanAgent(llmClient, reactAgent, createPlanReviewHandler(terminal, lineReader));
     }
 
-    private static AgentOrchestrator createTeamAgent(LlmClient llmClient, Agent reactAgent) {
+    private static AgentOrchestrator createTeamAgent(LlmClient llmClient, Agent reactAgent, Path projectDir) {
         System.out.println("👥 使用 Multi-Agent 协作模式\n");
+        try {
+            return AgentOrchestrator.fromProfileLoader(
+                    llmClient,
+                    reactAgent.getToolRegistry(),
+                    reactAgent.getMemoryManager(),
+                    new AgentProfileLoader(projectDir)
+            );
+        } catch (IOException e) {
+            System.out.println("Warning: failed to load SubAgent profiles; using default team: " + e.getMessage() + "\n");
+        }
         return new AgentOrchestrator(llmClient, reactAgent.getToolRegistry(), reactAgent.getMemoryManager());
+    }
+
+    private static String resolveRunMode(boolean nextTaskUsePlanMode, boolean nextTaskUseTeamMode,
+                                         CliCommandParser.CommandType commandType) {
+        if (nextTaskUsePlanMode || commandType == CliCommandParser.CommandType.SWITCH_PLAN) {
+            return HeadlessRunMode.PLAN.value();
+        }
+        if (nextTaskUseTeamMode || commandType == CliCommandParser.CommandType.SWITCH_TEAM) {
+            return HeadlessRunMode.TEAM.value();
+        }
+        return HeadlessRunMode.REACT.value();
+    }
+
+    private static String normalizeHeadlessMode(String mode) {
+        try {
+            return HeadlessRunMode.parse(mode).value();
+        } catch (Exception e) {
+            return mode == null || mode.isBlank() ? HeadlessRunMode.REACT.value() : mode.trim().toLowerCase();
+        }
+    }
+
+    private static String promptFromDecision(HookDecision decision, String originalPrompt) {
+        if (decision == null || !decision.modified() || decision.arguments() == null) {
+            return originalPrompt == null ? "" : originalPrompt;
+        }
+        return decision.arguments().path("prompt").asText(originalPrompt == null ? "" : originalPrompt);
+    }
+
+    private static PermissionProfile loadPermissionProfile(Path projectDir) {
+        try {
+            return PermissionProfileLoader.loadDefault(projectDir);
+        } catch (IOException e) {
+            System.err.println("Warning: failed to load permission profile; using default permissions: "
+                    + e.getMessage());
+            return PermissionProfile.defaultProfile();
+        }
+    }
+
+    private record HeadlessCliOptions(String task, String mode, boolean jsonl) {
+    }
+
+    private static boolean isHeadlessRun(String[] args) {
+        return args != null && args.length > 0 && "run".equalsIgnoreCase(args[0]);
+    }
+
+    private static int runHeadless(String[] args) {
+        HeadlessCliOptions options;
+        try {
+            options = parseHeadlessOptions(args);
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            printHeadlessUsage();
+            return 2;
+        }
+
+        configureLogging();
+        YuCLIConfig config = YuCLIConfig.load();
+        LlmClient llmClient = LlmClientFactory.createFromConfig(config);
+        if (llmClient == null) {
+            HeadlessRunResult result = HeadlessRunResult.failure(
+                    options.task(), options.mode(), new IllegalStateException("No available API key"), 0);
+            writeHeadlessResult(result, options.jsonl());
+            return 1;
+        }
+
+        Path projectDir = Path.of(".").toAbsolutePath().normalize();
+        HookManager hookManager = HookManager.loadDefault(projectDir);
+        hookManager.setLlmClient(llmClient);
+        HitlToolRegistry toolRegistry = new HitlToolRegistry(new TerminalHitlHandler(false), hookManager);
+        toolRegistry.setProjectPath(projectDir.toString());
+        toolRegistry.setPermissionProfile(loadPermissionProfile(projectDir));
+        toolRegistry.enableCheckpointing();
+        Agent reactAgent = new Agent(llmClient, toolRegistry);
+
+        HookDecision promptDecision = hookManager.runUserPromptSubmit(
+                options.task(),
+                normalizeHeadlessMode(options.mode()),
+                "headless",
+                "RUN");
+        if (!promptDecision.allowed()) {
+            HeadlessRunResult result = HeadlessRunResult.failure(
+                    options.task(),
+                    options.mode(),
+                    new IllegalStateException("[Hook] UserPromptSubmit 拒绝: " + promptDecision.reason()),
+                    0);
+            writeHeadlessResult(result, options.jsonl());
+            return 1;
+        }
+        String hookedTask = promptFromDecision(promptDecision, options.task()).trim();
+        if (hookedTask.isEmpty()) {
+            HeadlessRunResult result = HeadlessRunResult.failure(
+                    options.task(),
+                    options.mode(),
+                    new IllegalStateException("[Hook] UserPromptSubmit 将输入改为空"),
+                    0);
+            writeHeadlessResult(result, options.jsonl());
+            return 1;
+        }
+        options = new HeadlessCliOptions(hookedTask, options.mode(), options.jsonl());
+
+        HeadlessRunner runner = new HeadlessRunner((task, mode) -> switch (mode) {
+            case REACT -> reactAgent.run(task);
+            case PLAN -> new PlanExecuteAgent(
+                    llmClient,
+                    reactAgent.getToolRegistry(),
+                    reactAgent.getMemoryManager(),
+                    (goal, plan) -> PlanExecuteAgent.PlanReviewDecision.execute()
+            ).run(task);
+            case TEAM -> {
+                try {
+                    yield AgentOrchestrator.fromProfileLoader(
+                            llmClient,
+                            reactAgent.getToolRegistry(),
+                            reactAgent.getMemoryManager(),
+                            new AgentProfileLoader(projectDir)
+                    ).run(task);
+                } catch (IOException e) {
+                    yield new AgentOrchestrator(
+                            llmClient,
+                            reactAgent.getToolRegistry(),
+                            reactAgent.getMemoryManager()
+                    ).run(task);
+                }
+            }
+        });
+
+        HeadlessRunResult result = runHeadlessQuietly(runner, options);
+        writeHeadlessResult(result, options.jsonl());
+        return result.success() ? 0 : 1;
+    }
+
+    private static HeadlessCliOptions parseHeadlessOptions(String[] args) {
+        String mode = HeadlessRunMode.REACT.value();
+        boolean jsonl = false;
+        StringBuilder task = new StringBuilder();
+
+        for (int i = 1; i < args.length; i++) {
+            String arg = args[i];
+            if ("--help".equalsIgnoreCase(arg) || "-h".equalsIgnoreCase(arg)) {
+                throw new IllegalArgumentException("Headless run usage");
+            }
+            if ("--jsonl".equalsIgnoreCase(arg)) {
+                jsonl = true;
+                continue;
+            }
+            if ("--json".equalsIgnoreCase(arg)) {
+                jsonl = false;
+                continue;
+            }
+            if ("--mode".equalsIgnoreCase(arg)) {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("--mode requires a value: react, plan, or team");
+                }
+                mode = args[++i];
+                continue;
+            }
+            if (arg.startsWith("--mode=")) {
+                mode = arg.substring("--mode=".length());
+                continue;
+            }
+            if ("--".equals(arg)) {
+                for (int j = i + 1; j < args.length; j++) {
+                    appendTaskToken(task, args[j]);
+                }
+                break;
+            }
+            appendTaskToken(task, arg);
+        }
+
+        String taskText = task.toString().trim();
+        if (taskText.isEmpty()) {
+            throw new IllegalArgumentException("Headless task must not be blank");
+        }
+        return new HeadlessCliOptions(taskText, mode, jsonl);
+    }
+
+    private static void appendTaskToken(StringBuilder task, String token) {
+        if (task.length() > 0) {
+            task.append(' ');
+        }
+        task.append(token);
+    }
+
+    private static HeadlessRunResult runHeadlessQuietly(HeadlessRunner runner, HeadlessCliOptions options) {
+        PrintStream originalOut = System.out;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        HeadlessRunResult result;
+        try (PrintStream silentOut = new PrintStream(captured, true, StandardCharsets.UTF_8)) {
+            System.setOut(silentOut);
+            result = runner.run(options.task(), options.mode());
+        } finally {
+            System.setOut(originalOut);
+        }
+
+        String transcript = captured.toString(StandardCharsets.UTF_8).trim();
+        if (result.success() && result.result().isBlank() && !transcript.isBlank()) {
+            return new HeadlessRunResult(
+                    result.task(), result.mode(), true, transcript, result.error(), result.durationMs());
+        }
+        return result;
+    }
+
+    private static void writeHeadlessResult(HeadlessRunResult result, boolean jsonl) {
+        try {
+            String json = JsonlEventWriter.toJson(result);
+            System.out.println(json);
+        } catch (IOException e) {
+            System.err.println("Failed to serialize headless result: " + e.getMessage());
+        }
+    }
+
+    private static void printHeadlessUsage() {
+        System.err.println("Usage: yucli run <task> [--mode react|plan|team] [--json|--jsonl]");
     }
 
     private static String runWithCancelSupport(Terminal terminal, Callable<String> task) {
@@ -566,7 +1098,8 @@ public class Main {
             if (terminal != null && original != null) {
                 try {
                     terminal.setAttributes(original);
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    System.err.println("Warning: failed to restore terminal attributes: " + e.getMessage());
                 }
             }
             CancellationContext.clear(token);
@@ -603,7 +1136,7 @@ public class Main {
                 }
             }
             return decideEscCancel(next, escTail);
-        } catch (Exception ignored) {
+        } catch (IOException | InterruptedException ignored) {
             // 监听是 best-effort；失败不能影响任务执行。
             return false;
         }
@@ -750,7 +1283,7 @@ public class Main {
             } finally {
                 terminal.setAttributes(originalAttributes);
             }
-        } catch (Exception e) {
+        } catch (IOException | InterruptedException e) {
             return KeyReadResult.unavailable();
         }
     }
@@ -783,7 +1316,7 @@ public class Main {
             } finally {
                 terminal.setAttributes(originalAttributes);
             }
-        } catch (Exception e) {
+        } catch (IOException | InterruptedException e) {
             return null;
         }
     }
@@ -845,7 +1378,7 @@ public class Main {
     static List<String> startupHints() {
         return List.of(
                 "输入你的问题或任务",
-                "输入 '/model' 查看当前模型，'/model glm' 或 '/model deepseek' 切换模型",
+                "输入 '/model' 查看当前模型，'/model qwen'、'/model deepseek'、'/model glm' 或 '/model openai' 切换模型",
                 "输入 '/plan' 后，下一条任务使用 Plan-and-Execute 模式",
                 "输入 '/plan 任务内容' 直接用计划模式执行这条任务",
                 "输入 '/team' 后，下一条任务使用 Multi-Agent 协作模式",
@@ -856,11 +1389,19 @@ public class Main {
                 "输入 '/hitl off' 关闭 HITL 审批",
                 "输入 '/mcp' 查看 MCP server，'/mcp restart|logs|disable|enable <name>' 管理 MCP",
                 "输入 '/mcp resources <name>' 查看 MCP resources，'/mcp prompts <name>' 查看 prompts",
+                "输入 '/mcp auth <server>' 发起 OAuth 认证，'/mcp auth status' 查看认证状态，'/mcp auth revoke <server>' 撤销令牌",
                 "在普通任务里输入 '@server:protocol://path' 可显式引用 MCP resource",
                 "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
+                "输入 '/permissions' 查看权限 Profile（allow / deny / ask）",
+                "输入 '/checkpoint' 查看最近工具写入快照，'/undo' 恢复最近一次写入前状态",
                 "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
+                "输入 '/loop' 查看 ReAct 循环保底预算与停滞检测规则",
+                "输入 '/eval' 查看手动 EvalHarness 用例格式与启用命令（默认不运行真实 LLM）",
+                "输入 '/agents' 查看用户级和项目级 SubAgent Profile 配置",
+                "输入 '/hooks' 查看 PreToolUse / PostToolUse Hook 配置状态",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
+                "输入 '/plugin' 查看插件，'/plugin enable|disable <name>' 启用/禁用插件，'/plugin reload' 重新加载，'/plugin template <name>' 生成插件模板",
                 "输入 '/tui' 启动终端图形界面模式（TUI）",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
@@ -871,8 +1412,120 @@ public class Main {
                 "输入 '/memory' 查看记忆状态",
                 "输入 '/memory clear' 清空长期记忆",
                 "输入 '/save 事实内容' 手动保存关键事实",
-                "输入 '/exit' 或 '/quit' 退出"
+                "输入 '/session' 查看会话列表，'/session save' 保存当前会话，'/session load|delete|export <id>' 加载/删除/导出会话",
+                "输入 '/resume' 恢复上次未完成的会话",
+                "输入 '/exit'、'exit'、'q' 或 '退出' 退出"
         );
+    }
+
+    private static String formatProviderDetails(LlmClient llmClient) {
+        String effort = llmClient.getReasoningEffort();
+        if (effort == null || effort.isBlank()) {
+            return llmClient.getProviderName();
+        }
+        return llmClient.getProviderName() + ", reasoning=" + effort;
+    }
+
+    private static void printLoopStatus(LlmClient llmClient) {
+        AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
+        System.out.println("Loop 状态：");
+        System.out.println("   模式: ReAct 由 LLM 决定是否继续调用工具；没有固定 10 轮上限");
+        System.out.println("   有效 Token 预算: " + budget.tokenBudget()
+                + "（累计 input - cached + output；默认 258000）");
+        System.out.println("   上下文水位: " + budget.contextTokenWatermark() + " / "
+                + budget.contextWindow() + "（上一轮 input tokens 达到水位会提前收尾）");
+        System.out.println("   停滞检测: 连续 " + budget.stagnationWindow() + " 轮完全相同的工具名 + 参数会强制收尾");
+        System.out.println("   硬轮数上限: " + budget.hardMaxIterations() + " 轮");
+        System.out.println("   可调系统属性: YuCLI.react.token.budget / YuCLI.react.context.window / "
+                + "YuCLI.react.context.watermark.ratio / YuCLI.react.stagnation.window / "
+                + "YuCLI.react.hard.max.iterations");
+        System.out.println();
+    }
+
+    private static void printEvalInfo(String payload) {
+        String topic = payload == null || payload.isBlank()
+                ? "help"
+                : payload.trim().toLowerCase(java.util.Locale.ROOT);
+
+        if ("cases".equals(topic)) {
+            System.out.println("Eval cases 格式：");
+            System.out.println("   文件: src/test/resources/eval/cases.json");
+            System.out.println("   顶层: JSON array");
+            System.out.println("   字段: id, instruction, setupScript, verifyScript");
+            System.out.println("   setupScript/verifyScript 在临时目录内执行；verifyScript 退出码 0 表示通过");
+            System.out.println();
+            return;
+        }
+
+        if ("run".equals(topic)) {
+            System.out.println("EvalHarness 手动运行：");
+            System.out.println("   默认 mvn test 不会运行真实 LLM 评测");
+            System.out.println("   显式运行: mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true");
+            System.out.println("   风险: 会调用真实 LLM、执行本地 setup/verify 脚本，并消耗 API 配额");
+            System.out.println();
+            return;
+        }
+
+        System.out.println("EvalHarness：");
+        System.out.println("   /eval cases - 查看 src/test/resources/eval/cases.json 用例格式");
+        System.out.println("   /eval run   - 查看显式启用手动评测的 Maven 命令");
+        System.out.println("   说明: /eval 只展示说明，不运行 harness，也不会调用真实 LLM");
+        System.out.println();
+    }
+
+    private static void printAgentProfiles(Path projectDir) {
+        try {
+            Map<String, AgentProfile> profiles = new AgentProfileLoader(projectDir).load();
+            if (profiles.isEmpty()) {
+                System.out.println("SubAgent Profiles：未发现配置");
+                System.out.println("   用户级: ~/.YuCLI/agents/*.json");
+                System.out.println("   项目级: .YuCLI/agents/*.json");
+                System.out.println();
+                return;
+            }
+
+            System.out.println("SubAgent Profiles：");
+            profiles.values().forEach(profile -> {
+                System.out.println("   - " + profile.getName()
+                        + " [" + profile.getRole() + "]"
+                        + " tools=" + profile.getTools().size()
+                        + (profile.getModel() == null ? "" : " model=" + profile.getModel()));
+                if (profile.getSourcePath() != null) {
+                    System.out.println("     source: " + profile.getSourcePath());
+                }
+            });
+            System.out.println();
+        } catch (IOException e) {
+            System.out.println("❌ 读取 SubAgent Profile 失败: " + e.getMessage());
+            System.out.println();
+        }
+    }
+
+    private static void printHookStatus(HookManager.HookStatus status) {
+        System.out.println("Hooks:");
+        System.out.println("   enabled: " + status.enabled());
+        System.out.println("   project: " + status.projectPath());
+        System.out.println("   total: " + status.totalHooks());
+        if (!status.executorCounts().isEmpty()) {
+            System.out.println("   executors: command=" + status.executorCounts().getOrDefault("command", 0)
+                    + " http=" + status.executorCounts().getOrDefault("http", 0)
+                    + " prompt=" + status.executorCounts().getOrDefault("prompt", 0));
+        }
+        status.hookCounts().forEach((event, count) ->
+                System.out.println("   " + event + ": " + count));
+        if (!status.hooks().isEmpty()) {
+            System.out.println("   definitions:");
+            for (HookManager.HookSummary hook : status.hooks()) {
+                System.out.println("     - " + hook.event()
+                        + " matcher=" + hook.matcher()
+                        + " commands=" + hook.commandCount()
+                        + " http=" + hook.httpCount()
+                        + " prompt=" + hook.promptCount()
+                        + " async=" + hook.async()
+                        + " timeout=" + hook.timeoutSeconds() + "s");
+            }
+        }
+        System.out.println();
     }
 
     private static void printPolicyStatus(Agent reactAgent) {
@@ -883,7 +1536,24 @@ public class Main {
         System.out.println("   命令黑名单: sudo / rm -rf 全盘 / mkfs / dd of=/dev / fork bomb / curl|sh / find / / chmod 777 / / shutdown");
         System.out.println("   写入文件上限: 5MB");
         System.out.println("   命令执行上限: 60 秒，输出 8KB（截断）");
+        System.out.println("   权限 Profile: /permissions 查看 allow / deny / ask 规则");
+        System.out.println("   Checkpoint: /checkpoint 查看最近快照，/undo 恢复最近一次写入前状态");
         System.out.println("   审计目录: " + reactAgent.getToolRegistry().getAuditLog().getAuditDir());
+        System.out.println();
+    }
+
+    private static void printPermissionStatus(Agent reactAgent) {
+        System.out.println(reactAgent.getToolRegistry().getPermissionProfile().statusText());
+        System.out.println();
+    }
+
+    private static void printCheckpointStatus(Agent reactAgent) {
+        System.out.println(reactAgent.getToolRegistry().checkpointStatus());
+        System.out.println();
+    }
+
+    private static void printUndoResult(Agent reactAgent) {
+        System.out.println(reactAgent.getToolRegistry().restoreLastCheckpoint());
         System.out.println();
     }
 
@@ -1106,18 +1776,37 @@ public class Main {
     }
 
     private static void printBanner() {
-        System.out.println("╔══════════════════════════════════════════════════════════╗");
-        System.out.println("║                                                          ║");
-        System.out.println("║   ██████╗  █████╗ ██╗ ██████╗██╗     ██╗                ║");
-        System.out.println("║   ██╔══██╗██╔══██╗██║██╔════╝██║     ██║                ║");
-        System.out.println("║   ██████╔╝███████║██║██║     ██║     ██║                ║");
-        System.out.println("║   ██╔═══╝ ██╔══██║██║██║     ██║     ██║                ║");
-        System.out.println("║   ██║     ██║  ██║██║╚██████╗███████╗██║                ║");
-        System.out.println("║   ╚═╝     ╚═╝  ╚═╝╚═╝ ╚═════╝╚══════╝╚═╝                ║");
-        System.out.println("║                                                          ║");
-        System.out.printf("║      MCP-Native Agent CLI %-29s║%n", "v" + VERSION);
-        System.out.println("║                                                          ║");
-        System.out.println("╚══════════════════════════════════════════════════════════╝");
+        System.out.println(styleDim("YuCLI  v" + VERSION + "  session=local  ") + styleReady("ready"));
+        System.out.println(styleBanner("██╗   ██╗██╗   ██╗ ██████╗██╗     ██╗"));
+        System.out.println(styleBanner("╚██╗ ██╔╝██║   ██║██╔════╝██║     ██║"));
+        System.out.println(styleBanner(" ╚████╔╝ ██║   ██║██║     ██║     ██║"));
+        System.out.println(styleBanner("  ╚██╔╝  ██║   ██║██║     ██║     ██║"));
+        System.out.println(styleBanner("   ██║   ╚██████╔╝╚██████╗███████╗██║"));
+        System.out.println(styleBanner("   ╚═╝    ╚═════╝  ╚═════╝╚══════╝╚═╝"));
+        System.out.println(styleDim("输入消息开始对话   ·   /help 查看命令   ·   /exit / exit / q 退出"));
         System.out.println();
+    }
+
+    private static String styleBanner(String text) {
+        return wrapAnsi(ANSI_BANNER_CYAN, text);
+    }
+
+    private static String styleReady(String text) {
+        return wrapAnsi(ANSI_READY_GREEN, text);
+    }
+
+    private static String styleDim(String text) {
+        return wrapAnsi(ANSI_DIM, text);
+    }
+
+    private static String wrapAnsi(String style, String text) {
+        if (!AnsiStyle.isEnabled() || text == null || text.isEmpty()) {
+            return text;
+        }
+        return style + text + ANSI_RESET;
+    }
+
+    static Path userSkillsDir() {
+        return Path.of(System.getProperty("user.home"), ".YuCLI", "skills");
     }
 }

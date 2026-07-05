@@ -1,5 +1,6 @@
 package com.yucli.hitl;
 
+import com.yucli.policy.PermissionProfile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -129,6 +130,52 @@ class HitlToolRegistryTest {
 
         assertFalse(result.startsWith("[HITL]"));
         assertTrue(Files.exists(target));
+    }
+
+    @Test
+    void permissionAllowSkipsHitlApproval(@TempDir Path tempDir) throws Exception {
+        Path target = tempDir.resolve("permission-allow.txt");
+        StubHandler stub = new StubHandler(req -> {
+            throw new AssertionError("permission allow should skip HITL");
+        });
+        HitlToolRegistry registry = new HitlToolRegistry(stub);
+        registry.setProjectPath(tempDir.toString());
+        registry.enableCheckpointing(tempDir.resolve("checkpoints"));
+        registry.setPermissionProfile(new PermissionProfile(
+                "default",
+                List.of("write_file"),
+                List.of(),
+                List.of()
+        ));
+
+        String result = registry.executeTool("write_file",
+                "{\"path\":\"permission-allow.txt\",\"content\":\"ok\"}");
+
+        assertFalse(result.startsWith("[HITL]"), "实际输出: " + result);
+        assertEquals(0, stub.requestCount());
+        assertEquals("ok", Files.readString(target));
+    }
+
+    @Test
+    void permissionDenySkipsHitlApproval(@TempDir Path tempDir) {
+        StubHandler stub = new StubHandler(req -> {
+            throw new AssertionError("permission deny should skip HITL");
+        });
+        HitlToolRegistry registry = new HitlToolRegistry(stub);
+        registry.setProjectPath(tempDir.toString());
+        registry.setPermissionProfile(new PermissionProfile(
+                "default",
+                List.of(),
+                List.of("write_file"),
+                List.of()
+        ));
+
+        String result = registry.executeTool("write_file",
+                "{\"path\":\"permission-deny.txt\",\"content\":\"blocked\"}");
+
+        assertTrue(result.startsWith("[Permission]"), "实际输出: " + result);
+        assertEquals(0, stub.requestCount());
+        assertFalse(Files.exists(tempDir.resolve("permission-deny.txt")));
     }
 
     @Test

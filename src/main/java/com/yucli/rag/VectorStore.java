@@ -160,6 +160,10 @@ public class VectorStore implements AutoCloseable {
      * 语义检索：根据查询向量返回最相似的 TopK 代码块
      */
     public List<SearchResult> search(float[] queryEmbedding, int topK) throws SQLException {
+        if (topK <= 0) {
+            return List.of();
+        }
+
         String sql = "SELECT file_path, chunk_type, name, content, embedding_json FROM code_chunks WHERE project_path = ?";
         List<SearchResult> candidates = new ArrayList<>();
 

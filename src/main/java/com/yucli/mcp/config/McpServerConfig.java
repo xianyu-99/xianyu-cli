@@ -15,6 +15,11 @@ public class McpServerConfig {
     private String url;
     private Map<String, String> headers = new LinkedHashMap<>();
     private boolean disabled;
+    private boolean oauth;
+    private String clientId;
+    private List<String> scopes = new ArrayList<>();
+    private String authorizationEndpoint;
+    private String tokenEndpoint;
 
     public String getCommand() {
         return command;
@@ -74,5 +79,45 @@ public class McpServerConfig {
 
     public String transportName() {
         return isHttp() ? "http" : "stdio";
+    }
+
+    public boolean isOauth() {
+        return oauth;
+    }
+
+    public void setOauth(boolean oauth) {
+        this.oauth = oauth;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(String clientId) {
+        this.clientId = clientId;
+    }
+
+    public List<String> getScopes() {
+        return scopes;
+    }
+
+    public void setScopes(List<String> scopes) {
+        this.scopes = scopes == null ? new ArrayList<>() : scopes;
+    }
+
+    public String getAuthorizationEndpoint() {
+        return authorizationEndpoint;
+    }
+
+    public void setAuthorizationEndpoint(String authorizationEndpoint) {
+        this.authorizationEndpoint = authorizationEndpoint;
+    }
+
+    public String getTokenEndpoint() {
+        return tokenEndpoint;
+    }
+
+    public void setTokenEndpoint(String tokenEndpoint) {
+        this.tokenEndpoint = tokenEndpoint;
     }
 }

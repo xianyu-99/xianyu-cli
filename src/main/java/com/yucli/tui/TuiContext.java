@@ -10,8 +10,14 @@ import java.util.function.Consumer;
 
 /**
  * TUI 上下文：共享状态与事件总线。
+ *
+ * 当前布局固定为左侧 ChatPanel，右侧通过 fileTree/code/config 三个 Tab 切换内容。
  */
 public class TuiContext {
+
+    public static final String TAB_FILE_TREE = "fileTree";
+    public static final String TAB_CODE = "code";
+    public static final String TAB_CONFIG = "config";
 
     private String modelName = "glm-5.1";
     private String modeName = "ReAct";
@@ -54,14 +60,34 @@ public class TuiContext {
         this.modeLabel = mode;
     }
 
-    public void fireTabSwitch(String tabName) {
-        activeTabIndex = switch (tabName) {
-            case "chat" -> 0;
-            case "code" -> 1;
-            case "config" -> 2;
-            default -> activeTabIndex;
+    public String getActiveTabName() {
+        return switch (activeTabIndex) {
+            case 0 -> TAB_FILE_TREE;
+            case 1 -> TAB_CODE;
+            case 2 -> TAB_CONFIG;
+            default -> TAB_FILE_TREE;
         };
+    }
+
+    public void fireTabSwitch(String tabName) {
+        Integer nextIndex = tabIndexFor(tabName);
+        if (nextIndex == null) {
+            return;
+        }
+        activeTabIndex = nextIndex;
         for (Consumer<String> l : tabSwitchListeners) l.accept(tabName);
+    }
+
+    static Integer tabIndexFor(String tabName) {
+        if (tabName == null) {
+            return null;
+        }
+        return switch (tabName) {
+            case TAB_FILE_TREE -> 0;
+            case TAB_CODE -> 1;
+            case TAB_CONFIG -> 2;
+            default -> null;
+        };
     }
 
     public void fireAction(String action) {

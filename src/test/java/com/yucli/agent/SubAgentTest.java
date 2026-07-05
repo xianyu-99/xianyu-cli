@@ -1,7 +1,10 @@
 package com.yucli.agent;
 
+import com.yucli.agent.config.AgentProfile;
 import com.yucli.llm.GLMClient;
 import com.yucli.llm.LlmClient;
+import com.yucli.runtime.CancellationContext;
+import com.yucli.runtime.CancellationToken;
 import com.yucli.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -11,9 +14,12 @@ import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SubAgentTest {
@@ -26,6 +32,108 @@ class SubAgentTest {
                 new GLMClient("test-key"), new ToolRegistry())));
         assertFalse(invokeShouldUseTools(new SubAgent("reviewer", AgentRole.REVIEWER,
                 new GLMClient("test-key"), new ToolRegistry())));
+    }
+
+    @Test
+    void shouldAppendProfileInstructionsAndToolWhitelistToSystemPrompt() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("repo-reader");
+        profile.setRole("worker");
+        profile.setInstructions("PROFILE_INSTRUCTION_MARKER");
+        profile.setTools(List.of("read_file", "search_code"));
+
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, new ToolRegistry());
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        PrintStream ps = new PrintStream(baos, true, StandardCharsets.UTF_8);
+        AgentMessage result = worker.execute(AgentMessage.task("orchestrator", "inspect repo"), ps);
+
+        assertEquals("repo-reader", result.fromAgent());
+        assertTrue(llm.systemPrompt.contains("Profile custom instructions"));
+        assertTrue(llm.systemPrompt.contains("PROFILE_INSTRUCTION_MARKER"));
+        assertTrue(llm.systemPrompt.contains("Profile tool whitelist"));
+        assertTrue(llm.systemPrompt.contains("read_file"));
+        assertTrue(llm.systemPrompt.contains("search_code"));
+    }
+
+    @Test
+    void shouldFilterToolDefinitionsWithProfileWhitelist() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("repo-reader");
+        profile.setRole("worker");
+        profile.setInstructions("Only read files");
+        profile.setTools(List.of("read_file"));
+
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, new ToolRegistry());
+
+        worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        assertNotNull(llm.capturedTools);
+        assertEquals(List.of("read_file"), llm.capturedTools.stream().map(LlmClient.Tool::name).toList());
+    }
+
+    @Test
+    void shouldApplyProfileDeniedToolsToToolDefinitions() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("safe-worker");
+        profile.setRole("worker");
+        profile.setInstructions("No shell access");
+        profile.setDeniedTools(List.of("execute_command"));
+        profile.setAllowedCommands(List.of("git status"));
+
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, new ToolRegistry());
+
+        worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        List<String> names = llm.capturedTools.stream().map(LlmClient.Tool::name).toList();
+        assertFalse(names.contains("execute_command"));
+        assertTrue(names.contains("read_file"));
+        assertTrue(llm.systemPrompt.contains("Profile execution scope"));
+        assertTrue(llm.systemPrompt.contains("execute_command"));
+        assertTrue(llm.systemPrompt.contains("git status"));
+    }
+
+    @Test
+    void shouldRejectUnauthorizedProfileToolCallWithoutTouchingDelegateRegistry() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("limited-worker");
+        profile.setRole("worker");
+        profile.setInstructions("Only read files");
+        profile.setTools(List.of("read_file"));
+
+        UnauthorizedThenFinalClient llm = new UnauthorizedThenFinalClient();
+        CountingToolRegistry tools = new CountingToolRegistry();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, tools);
+
+        AgentMessage result = worker.execute(AgentMessage.task("orchestrator", "run a command"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        assertEquals(AgentMessage.Type.RESULT, result.type());
+        assertEquals(0, tools.executeToolsCalls.get(), "Unauthorized tool must not reach delegate registry");
+        assertEquals(2, llm.chatCalls.get(), "SubAgent should continue after returning denial as tool result");
+        assertTrue(llm.denialToolMessage.contains("工具调用被拒绝"));
+        assertTrue(llm.denialToolMessage.contains("execute_command"));
+    }
+
+    @Test
+    void shouldUsePromptScopedToolDefinitionsWhenProfileWhitelistIsEmpty() {
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        ToolRegistry tools = new ToolRegistry();
+        SubAgent worker = new SubAgent("default-worker", AgentRole.WORKER, llm, tools,
+                "No custom restrictions", List.of());
+
+        worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        List<String> expectedToolNames = tools.getToolDefinitions("inspect repo").stream().map(LlmClient.Tool::name).toList();
+        List<String> actualToolNames = llm.capturedTools.stream().map(LlmClient.Tool::name).toList();
+        assertEquals(expectedToolNames, actualToolNames);
+        assertFalse(actualToolNames.contains("execute_command"));
     }
 
     @Test
@@ -138,10 +246,55 @@ class SubAgentTest {
         assertTrue(output.contains("答案"), "content should still appear");
     }
 
+    @Test
+    void shouldStopBeforeToolsWhenCancelledAfterLlmToolCallResponse() {
+        CancellationToken token = CancellationContext.startRun();
+        CancelThenToolCallClient llm = new CancelThenToolCallClient();
+        CountingToolRegistry tools = new CountingToolRegistry();
+        SubAgent worker = new SubAgent("cancel-worker", AgentRole.WORKER, llm, tools);
+
+        try {
+            AgentMessage result = worker.execute(AgentMessage.task("orchestrator", "cancel after llm"));
+
+            assertEquals(AgentMessage.Type.ERROR, result.type());
+            assertTrue(result.content().contains("取消"), "SubAgent should return a cancellation error");
+            assertEquals(0, tools.executeToolsCalls.get(), "Cancelled SubAgent must not execute tool calls");
+            assertEquals(1, llm.chatCalls.get(), "Cancelled SubAgent must not enter a second LLM round");
+        } finally {
+            CancellationContext.clear(token);
+        }
+    }
+
     private boolean invokeShouldUseTools(SubAgent agent) throws Exception {
         Method method = SubAgent.class.getDeclaredMethod("shouldUseTools");
         method.setAccessible(true);
         return (boolean) method.invoke(agent);
+    }
+
+    private static final class CapturingSystemPromptClient extends GLMClient {
+        private String systemPrompt = "";
+        private List<Tool> capturedTools = List.of();
+
+        private CapturingSystemPromptClient() {
+            super("test-key");
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
+            return chat(messages, tools, StreamListener.NO_OP);
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) {
+            capturedTools = tools;
+            systemPrompt = messages.stream()
+                    .filter(message -> "system".equals(message.role()))
+                    .findFirst()
+                    .map(Message::content)
+                    .orElse("");
+            listener.onContentDelta("done");
+            return new ChatResponse("assistant", "done", null, null, 10, 5);
+        }
     }
 
     /**
@@ -194,6 +347,84 @@ class SubAgentTest {
             CallScript next = iter.next();
             next.streamScript().accept(listener);
             return next.response();
+        }
+    }
+
+    private static final class CancelThenToolCallClient extends GLMClient {
+        private final AtomicInteger chatCalls = new AtomicInteger();
+
+        private CancelThenToolCallClient() {
+            super("test-key");
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
+            return chat(messages, tools, StreamListener.NO_OP);
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) throws IOException {
+            int call = chatCalls.incrementAndGet();
+            if (call > 1) {
+                throw new IOException("SubAgent should not call LLM again after cancellation");
+            }
+            CancellationContext.current().cancel();
+            return new ChatResponse(
+                    "assistant",
+                    "will call tool",
+                    null,
+                    List.of(new ToolCall("call_1", new ToolCall.Function("list_dir", "{\"path\":\".\"}"))),
+                    10,
+                    5
+            );
+        }
+    }
+
+    private static final class UnauthorizedThenFinalClient extends GLMClient {
+        private final AtomicInteger chatCalls = new AtomicInteger();
+        private String denialToolMessage = "";
+
+        private UnauthorizedThenFinalClient() {
+            super("test-key");
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
+            return chat(messages, tools, StreamListener.NO_OP);
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) {
+            int call = chatCalls.incrementAndGet();
+            if (call == 1) {
+                return new ChatResponse(
+                        "assistant",
+                        "will call unauthorized tool",
+                        null,
+                        List.of(new ToolCall("call_1", new ToolCall.Function(
+                                "execute_command", "{\"command\":\"echo denied\"}"))),
+                        10,
+                        5
+                );
+            }
+
+            denialToolMessage = messages.stream()
+                    .filter(message -> "tool".equals(message.role()))
+                    .findFirst()
+                    .map(Message::content)
+                    .orElse("");
+            listener.onContentDelta("done");
+            return new ChatResponse("assistant", "done", null, null, 10, 5);
+        }
+    }
+
+    private static final class CountingToolRegistry extends ToolRegistry {
+        private final AtomicInteger executeToolsCalls = new AtomicInteger();
+
+        @Override
+        public List<ToolExecutionResult> executeTools(List<ToolInvocation> invocations) {
+            executeToolsCalls.incrementAndGet();
+            return List.of();
         }
     }
 }

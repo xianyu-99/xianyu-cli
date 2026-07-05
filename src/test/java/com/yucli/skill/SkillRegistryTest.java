@@ -1,13 +1,18 @@
 package com.yucli.skill;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SkillRegistryTest {
+
+    @TempDir
+    Path tempDir;
 
     Skill sampleSkill() {
         return new Skill("web-access", "联网手册",
@@ -64,5 +69,28 @@ class SkillRegistryTest {
         assertTrue(expanded.startsWith("【Skill: web-access】"));
         assertTrue(expanded.contains("使用 web_search"));
         assertTrue(expanded.endsWith("【Skill 结束】"));
+    }
+
+    @Test
+    void reloadKeepsUserSkillsLoadedFromPreviousDirectory() throws Exception {
+        Path customSkillDir = tempDir.resolve("custom-skill");
+        Files.createDirectories(customSkillDir);
+        Files.writeString(customSkillDir.resolve("SKILL.md"), """
+                ---
+                name: custom-skill
+                description: 用户自定义 Skill
+                triggers: [custom]
+                ---
+                自定义内容
+                """);
+
+        SkillRegistry registry = new SkillRegistry();
+        registry.loadUserSkills(tempDir);
+        assertNotNull(registry.getSkill("custom-skill"));
+
+        registry.reload();
+
+        assertNotNull(registry.getSkill("custom-skill"),
+                "reload should preserve previously configured user skills directory");
     }
 }

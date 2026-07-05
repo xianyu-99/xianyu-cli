@@ -118,6 +118,9 @@ public class NetworkPolicy {
                 if (addr.isLinkLocalAddress()) {
                     return "禁止访问链路本地地址（" + addr.getHostAddress() + "）";
                 }
+                if (isIpv6UniqueLocalAddress(addr)) {
+                    return "Forbidden IPv6 unique local address: " + addr.getHostAddress();
+                }
                 if (addr.isSiteLocalAddress()) {
                     return "禁止访问站内地址（" + addr.getHostAddress() + "）";
                 }
@@ -126,5 +129,10 @@ public class NetworkPolicy {
             return "无法解析主机: " + host;
         }
         return null;
+    }
+
+    private boolean isIpv6UniqueLocalAddress(InetAddress addr) {
+        byte[] bytes = addr.getAddress();
+        return bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
     }
 }

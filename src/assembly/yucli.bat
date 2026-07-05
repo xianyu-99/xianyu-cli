@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 REM YuCLI Launcher Script for Windows
-REM https://github.com/yucli/paicli
+REM https://github.com/xianyu-99/xianyu-cli
 
 set "APP_DIR=%~dp0.."
 set "JAR_PATH=%APP_DIR%\lib\YuCLI.jar"

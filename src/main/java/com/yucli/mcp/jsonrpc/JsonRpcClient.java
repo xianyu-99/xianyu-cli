@@ -2,6 +2,7 @@ package com.yucli.mcp.jsonrpc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yucli.mcp.transport.McpTransport;
 
@@ -23,12 +24,15 @@ public class JsonRpcClient implements AutoCloseable {
     private final McpTransport transport;
     private final AtomicLong ids = new AtomicLong(1);
     private final ConcurrentHashMap<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
+    private final Object lifecycleLock = new Object();
+    private volatile boolean closed;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "YuCLI-mcp-jsonrpc-timeout");
         thread.setDaemon(true);
         return thread;
     });
     private final List<Consumer<JsonNode>> notificationListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final ConcurrentHashMap<String, java.util.function.Function<JsonNode, JsonNode>> requestHandlers = new ConcurrentHashMap<>();
 
     public JsonRpcClient(McpTransport transport) {
         this.transport = transport;
@@ -50,13 +54,18 @@ public class JsonRpcClient implements AutoCloseable {
         }
 
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
-        pending.put(id, future);
-        scheduler.schedule(() -> {
-            CompletableFuture<JsonNode> removed = pending.remove(id);
-            if (removed != null) {
-                removed.completeExceptionally(new TimeoutException("JSON-RPC request timed out: " + method));
+        synchronized (lifecycleLock) {
+            if (closed) {
+                throw new IOException("JSON-RPC client closed");
             }
-        }, timeoutSeconds, TimeUnit.SECONDS);
+            pending.put(id, future);
+            scheduler.schedule(() -> {
+                CompletableFuture<JsonNode> removed = pending.remove(id);
+                if (removed != null) {
+                    removed.completeExceptionally(new TimeoutException("JSON-RPC request timed out: " + method));
+                }
+            }, timeoutSeconds, TimeUnit.SECONDS);
+        }
 
         try {
             transport.send(request);
@@ -88,6 +97,12 @@ public class JsonRpcClient implements AutoCloseable {
         }
     }
 
+    public void onRequest(String method, java.util.function.Function<JsonNode, JsonNode> handler) {
+        if (method != null && handler != null) {
+            requestHandlers.put(method, handler);
+        }
+    }
+
     private void handleMessage(JsonNode message) {
         JsonNode idNode = message.get("id");
         if (idNode == null || idNode.isNull()) {
@@ -96,6 +111,27 @@ public class JsonRpcClient implements AutoCloseable {
             }
             return;
         }
+
+        // Server-initiated request: has id AND method
+        JsonNode methodNode = message.get("method");
+        if (methodNode != null && !methodNode.isNull()) {
+            String method = methodNode.asText("");
+            JsonNode params = message.get("params");
+            java.util.function.Function<JsonNode, JsonNode> handler = requestHandlers.get(method);
+            if (handler == null) {
+                sendResponse(idNode, null, new JsonRpcException(-32601, "Method not found: " + method));
+                return;
+            }
+            try {
+                JsonNode result = handler.apply(params);
+                sendResponse(idNode, result, null);
+            } catch (Exception e) {
+                sendResponse(idNode, null, new JsonRpcException(-32603, e.getMessage()));
+            }
+            return;
+        }
+
+        // Response to our request
         long id = idNode.asLong();
         CompletableFuture<JsonNode> future = pending.remove(id);
         if (future == null) {
@@ -111,9 +147,36 @@ public class JsonRpcClient implements AutoCloseable {
         future.complete(message.get("result"));
     }
 
+    private void sendResponse(JsonNode idNode, JsonNode result, JsonRpcException error) {
+        try {
+            ObjectNode response = MAPPER.createObjectNode();
+            response.put("jsonrpc", "2.0");
+            response.set("id", idNode.deepCopy());
+            if (error != null) {
+                ObjectNode errorObj = response.putObject("error");
+                errorObj.put("code", error.code());
+                errorObj.put("message", error.getMessage());
+            } else {
+                response.set("result", result != null ? result : JsonNodeFactory.instance.objectNode());
+            }
+            transport.send(response);
+        } catch (IOException e) {
+            // Log but don't throw - we're in a callback
+        }
+    }
+
     @Override
     public void close() {
-        scheduler.shutdownNow();
+        IOException closed = new IOException("JSON-RPC client closed");
+        synchronized (lifecycleLock) {
+            if (this.closed) {
+                return;
+            }
+            this.closed = true;
+            pending.forEach((id, future) -> future.completeExceptionally(closed));
+            pending.clear();
+            scheduler.shutdownNow();
+        }
         transport.close();
     }
 }

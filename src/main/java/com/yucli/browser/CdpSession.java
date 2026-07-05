@@ -2,7 +2,6 @@ package com.yucli.browser;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.Base64;
@@ -17,8 +16,8 @@ import java.util.concurrent.TimeoutException;
  */
 public class CdpSession {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long DEFAULT_TIMEOUT_MS = 30_000;
+    private static final int DEFAULT_CLEAN_DOM_MAX_LENGTH = 8000;
 
     private final CdpWebSocketClient client;
     private final ObjectMapper mapper;
@@ -82,7 +81,10 @@ public class CdpSession {
         params.put("format", "png");
         params.put("fromSurface", true);
 
-        if (fullPage) {
+        if (selector != null && !selector.isBlank()) {
+            params.set("clip", getElementClip(selector));
+            params.put("captureBeyondViewport", true);
+        } else if (fullPage) {
             // 获取完整页面尺寸
             JsonNode metrics = client.sendSync("Page.getLayoutMetrics", null);
             JsonNode contentSize = metrics.path("contentSize");
@@ -91,11 +93,6 @@ public class CdpSession {
                     .put("width", contentSize.path("width").asDouble(1920))
                     .put("height", contentSize.path("height").asDouble(1080))
                     .put("scale", 1));
-        }
-
-        if (selector != null && !selector.isBlank()) {
-            // 先滚动到元素位置
-            scrollIntoView(selector);
         }
 
         JsonNode result = client.sendSync("Page.captureScreenshot", params);
@@ -150,6 +147,117 @@ public class CdpSession {
     public String getHtml() throws Exception {
         JsonNode result = evaluate("document.documentElement.outerHTML");
         return result.path("result").path("value").asText("");
+    }
+
+    /**
+     * 获取总结/清洗后的页面 DOM，用于大模型分析。
+     */
+    public String getCleanDom() throws Exception {
+        return getCleanDom(DEFAULT_CLEAN_DOM_MAX_LENGTH);
+    }
+
+    /**
+     * 获取总结/清洗后的页面 DOM，并在浏览器侧尽早截断，避免传输完整大页面。
+     */
+    public String getCleanDom(int maxLength) throws Exception {
+        JsonNode result = evaluate(buildCleanDomScript(maxLength));
+        JsonNode exceptionDetails = result.path("exceptionDetails");
+        if (!exceptionDetails.isMissingNode() && !exceptionDetails.isNull()) {
+            String message = exceptionDetails.path("text").asText(exceptionDetails.toString());
+            throw new RuntimeException("DOM 摘要脚本执行失败: " + message);
+        }
+        return result.path("result").path("value").asText("");
+    }
+
+    static String buildCleanDomScript(int maxLength) {
+        int safeMaxLength = Math.max(0, maxLength);
+        return """
+                (function(maxLength) {
+                  const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "SVG", "NOSCRIPT", "META", "LINK", "PATH", "IFRAME"]);
+                  const HTML_ESCAPE = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
+                  const parts = [];
+                  let size = 0;
+                  let truncated = false;
+
+                  function append(text) {
+                    if (!text || truncated) {
+                      return;
+                    }
+                    const remaining = maxLength - size;
+                    if (remaining <= 0) {
+                      truncated = true;
+                      return;
+                    }
+                    if (text.length > remaining) {
+                      parts.push(text.slice(0, remaining));
+                      size += remaining;
+                      truncated = true;
+                    } else {
+                      parts.push(text);
+                      size += text.length;
+                    }
+                  }
+
+                  function escapeHtml(value) {
+                    return String(value).replace(/[&<>"']/g, function(ch) {
+                      return HTML_ESCAPE[ch];
+                    });
+                  }
+
+                  function walk(node) {
+                    if (!node || truncated) {
+                      return;
+                    }
+                    if (node.nodeType === Node.TEXT_NODE) {
+                      const text = node.nodeValue.replace(/\\s+/g, " ").trim();
+                      if (text) {
+                        append(escapeHtml(text));
+                      }
+                      return;
+                    }
+                    if (node.nodeType !== Node.ELEMENT_NODE || SKIP_TAGS.has(node.tagName)) {
+                      return;
+                    }
+
+                    const tag = node.tagName.toLowerCase();
+                    append("<" + tag);
+                    for (const attr of Array.from(node.attributes || [])) {
+                      const name = attr.name.toLowerCase();
+                      if (name === "class" || name === "style" || name.startsWith("on")) {
+                        continue;
+                      }
+                      let value = attr.value || "";
+                      if (value.length > 160) {
+                        value = value.slice(0, 160) + "...";
+                      }
+                      append(" " + name + '="' + escapeHtml(value) + '"');
+                      if (truncated) {
+                        return;
+                      }
+                    }
+                    append(">");
+
+                    for (const child of Array.from(node.childNodes || [])) {
+                      walk(child);
+                      if (truncated) {
+                        break;
+                      }
+                    }
+                    append("</" + tag + ">");
+                  }
+
+                  const root = document.body || document.documentElement;
+                  if (!root) {
+                    return "";
+                  }
+                  walk(root);
+                  const value = parts.join("").replace(/>\\s+</g, "><").trim();
+                  if (truncated) {
+                    return value + "\\n... (truncated, total exceeds " + maxLength + " chars)";
+                  }
+                  return value;
+                })(%d);
+                """.formatted(safeMaxLength);
     }
 
     // ---- Input Domain ----
@@ -223,14 +331,44 @@ public class CdpSession {
 
     // ---- Helper methods ----
 
-    private void scrollIntoView(String selector) throws Exception {
+    private ObjectNode getElementClip(String selector) throws Exception {
         String script = String.format(
-            "document.querySelector('%s').scrollIntoView({behavior: 'instant', block: 'center'})",
+            "(function() { " +
+            "  var el = document.querySelector('%s'); " +
+            "  if (!el) return null; " +
+            "  el.scrollIntoView({behavior: 'instant', block: 'center', inline: 'center'}); " +
+            "  var rect = el.getBoundingClientRect(); " +
+            "  if (!rect || rect.width <= 0 || rect.height <= 0) return {empty: true}; " +
+            "  return { " +
+            "    x: Math.max(0, rect.left + window.scrollX), " +
+            "    y: Math.max(0, rect.top + window.scrollY), " +
+            "    width: rect.width, " +
+            "    height: rect.height " +
+            "  }; " +
+            "})()",
             selector.replace("'", "\\'")
         );
-        evaluate(script);
-        // 等待滚动完成
-        Thread.sleep(200);
+        JsonNode result = evaluate(script);
+        JsonNode clipValue = result.path("result").path("value");
+        if (clipValue.isMissingNode() || clipValue.isNull()) {
+            throw new RuntimeException("未找到元素: " + selector);
+        }
+        if (clipValue.path("empty").asBoolean(false)) {
+            throw new RuntimeException("元素尺寸为空，无法截图: " + selector);
+        }
+
+        double width = clipValue.path("width").asDouble();
+        double height = clipValue.path("height").asDouble();
+        if (width <= 0 || height <= 0) {
+            throw new RuntimeException("元素尺寸为空，无法截图: " + selector);
+        }
+
+        return mapper.createObjectNode()
+                .put("x", clipValue.path("x").asDouble(0))
+                .put("y", clipValue.path("y").asDouble(0))
+                .put("width", width)
+                .put("height", height)
+                .put("scale", 1);
     }
 
     private void dispatchMouseEvent(String type, double x, double y) throws Exception {

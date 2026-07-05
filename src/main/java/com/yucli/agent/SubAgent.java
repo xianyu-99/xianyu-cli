@@ -2,7 +2,10 @@ package com.yucli.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yucli.agent.config.AgentProfile;
 import com.yucli.llm.LlmClient;
+import com.yucli.runtime.CancellationContext;
+import com.yucli.tool.ScopedToolRegistry;
 import com.yucli.tool.ToolRegistry;
 import com.yucli.tool.ToolRegistry.ToolExecutionResult;
 import com.yucli.tool.ToolRegistry.ToolInvocation;
@@ -16,6 +19,7 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -32,6 +36,10 @@ public class SubAgent {
     private final AgentRole role;
     private final LlmClient llmClient;
     private final ToolRegistry toolRegistry;
+    private final String customInstructions;
+    private final List<String> toolWhitelist;
+    private final List<String> deniedTools;
+    private final List<String> allowedCommands;
     private final List<LlmClient.Message> conversationHistory;
 
     // 各角色的系统提示词
@@ -122,23 +130,107 @@ public class SubAgent {
             """;
 
     public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry) {
+        this(name, role, llmClient, toolRegistry, null, List.of());
+    }
+
+    public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
+                    String customInstructions, List<String> toolWhitelist) {
+        this(name, role, llmClient, toolRegistry, customInstructions, toolWhitelist,
+                List.of(), List.of(), null);
+    }
+
+    public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
+                    String customInstructions, List<String> toolWhitelist,
+                    List<String> allowedPaths, List<String> deniedCommands, String workingDirectory) {
+        this(name, role, llmClient, toolRegistry, customInstructions, toolWhitelist,
+                allowedPaths, deniedCommands, workingDirectory, List.of(), List.of());
+    }
+
+    public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
+                    String customInstructions, List<String> toolWhitelist,
+                    List<String> allowedPaths, List<String> deniedCommands, String workingDirectory,
+                    List<String> deniedTools, List<String> allowedCommands) {
         this.name = name;
         this.role = role;
         this.llmClient = llmClient;
-        this.toolRegistry = toolRegistry;
+        this.customInstructions = customInstructions;
+        this.toolWhitelist = sanitizeToolWhitelist(toolWhitelist);
+        this.deniedTools = sanitizeToolWhitelist(deniedTools);
+        this.allowedCommands = sanitizeToolWhitelist(allowedCommands);
+        boolean scoped = !this.toolWhitelist.isEmpty()
+                || !this.deniedTools.isEmpty()
+                || !this.allowedCommands.isEmpty()
+                || (allowedPaths != null && !allowedPaths.isEmpty())
+                || (deniedCommands != null && !deniedCommands.isEmpty())
+                || (workingDirectory != null && !workingDirectory.isBlank());
+        this.toolRegistry = !scoped
+                ? toolRegistry
+                : new ScopedToolRegistry(toolRegistry, this.toolWhitelist,
+                        allowedPaths, deniedCommands, workingDirectory,
+                        this.deniedTools, this.allowedCommands);
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
         this.conversationHistory = new ArrayList<>();
         this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));
+    }
+
+    public SubAgent(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
+        this(profile.getName(), profile.getRole(), llmClient, toolRegistry,
+                profile.getInstructions(), profile.getTools(),
+                profile.getAllowedPaths(), profile.getDeniedCommands(), profile.getWorkingDirectory(),
+                profile.getDeniedTools(), profile.getAllowedCommands());
+    }
+
+    public static SubAgent fromProfile(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
+        return new SubAgent(profile, llmClient, toolRegistry);
     }
 
     /**
      * 根据角色获取系统提示词
      */
     private String getSystemPrompt() {
-        return switch (role) {
+        String basePrompt = switch (role) {
             case PLANNER -> PLANNER_PROMPT;
             case WORKER -> WORKER_PROMPT;
             case REVIEWER -> REVIEWER_PROMPT;
         };
+        StringBuilder prompt = new StringBuilder(basePrompt);
+        if (customInstructions != null && !customInstructions.isBlank()) {
+            prompt.append("\n\n[Profile custom instructions]\n")
+                    .append(customInstructions.trim());
+        }
+        if (!toolWhitelist.isEmpty()) {
+            prompt.append("\n\n[Profile tool whitelist]\n")
+                    .append("Configured allowed tools: ")
+                    .append(String.join(", ", toolWhitelist))
+                    .append("\nWhen this role can call tools, only call tools in this list. ")
+                    .append("If a task requires another tool, explain that the profile does not allow it.");
+        }
+        if (!deniedTools.isEmpty() || !allowedCommands.isEmpty()) {
+            prompt.append("\n\n[Profile execution scope]\n");
+            if (!deniedTools.isEmpty()) {
+                prompt.append("Denied tools: ")
+                        .append(String.join(", ", deniedTools))
+                        .append('\n');
+            }
+            if (!allowedCommands.isEmpty()) {
+                prompt.append("Allowed commands: ")
+                        .append(String.join(", ", allowedCommands))
+                        .append('\n');
+            }
+            prompt.append("These limits are enforced by the runtime before the shared ToolRegistry.");
+        }
+        return prompt.toString();
+    }
+
+    private static List<String> sanitizeToolWhitelist(List<String> tools) {
+        if (tools == null || tools.isEmpty()) {
+            return List.of();
+        }
+        return tools.stream()
+                .filter(tool -> tool != null && !tool.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
     }
 
     /**
@@ -153,6 +245,34 @@ public class SubAgent {
      * 避免多个 Agent 同时写入 System.out 造成输出交错。
      */
     public AgentMessage execute(AgentMessage task, PrintStream out) {
+        long lifecycleStartNanos = System.nanoTime();
+        AgentMessage result = null;
+        String error = "";
+        toolRegistry.getHookManager().runSubAgentStart(
+                name,
+                hookRoleName(),
+                task.fromAgent(),
+                task.type() == null ? "" : task.type().name(),
+                task.content());
+        try {
+            result = executeInternal(task, out);
+            return result;
+        } catch (RuntimeException e) {
+            error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        } finally {
+            String resultType = result == null ? (error.isBlank() ? "" : "ERROR") : result.type().name();
+            String content = result == null ? error : result.content();
+            toolRegistry.getHookManager().runSubAgentFinish(
+                    name,
+                    hookRoleName(),
+                    resultType,
+                    content,
+                    elapsedMillis(lifecycleStartNanos));
+        }
+    }
+
+    private AgentMessage executeInternal(AgentMessage task, PrintStream out) {
         log.info("[{}] executing task from {}: type={}", name, task.fromAgent(), task.type());
         String taskContent = task.content();
 
@@ -163,13 +283,22 @@ public class SubAgent {
 
         long startNanos = System.nanoTime();
         AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
+        List<LlmClient.Tool> activeToolDefinitions = shouldUseTools()
+                ? toolRegistry.getToolDefinitions(taskContent)
+                : null;
+        int activeToolCount = activeToolDefinitions == null ? 0 : activeToolDefinitions.size();
 
         // 与 Agent.java 对称：主退出条件 = LLM 自决，budget 仅在 token / 停滞 / 硬轮数兜底。
         while (true) {
+            if (CancellationContext.isCancelled()) {
+                log.info("[{}] run cancelled before iteration", name);
+                return cancelledResult(streamRenderer);
+            }
+
             AgentBudget.ExitReason exitReason = budget.check();
             if (exitReason != AgentBudget.ExitReason.WITHIN_BUDGET) {
                 streamRenderer.finish();
-                out.println(formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), startNanos));
+                out.println(formatTokenStats(budget, activeToolCount, startNanos));
                 String description = budget.describeExit(exitReason);
                 log.warn("[{}] run exhausted budget: reason={}, iteration={}, tokens={}/{}",
                         name, exitReason, budget.iteration(),
@@ -182,11 +311,15 @@ public class SubAgent {
             try {
                 LlmClient.ChatResponse response = llmClient.chat(
                         conversationHistory,
-                        shouldUseTools() ? toolRegistry.getToolDefinitions() : null,
+                        activeToolDefinitions,
                         streamRenderer
                 );
+                if (CancellationContext.isCancelled()) {
+                    log.info("[{}] run cancelled after LLM response", name);
+                    return cancelledResult(streamRenderer);
+                }
 
-                budget.recordTokens(response.inputTokens(), response.outputTokens());
+                budget.recordTokens(response.inputTokens(), response.outputTokens(), response.cachedTokens());
 
                 if (response.hasToolCalls()) {
                     budget.recordToolCalls(response.toolCalls());
@@ -202,6 +335,10 @@ public class SubAgent {
                     streamRenderer.resetBetweenIterations();
 
                     List<ToolExecutionResult> toolResults = executeToolCalls(response.toolCalls());
+                    if (CancellationContext.isCancelled()) {
+                        log.info("[{}] run cancelled after tool execution", name);
+                        return cancelledResult(streamRenderer);
+                    }
                     for (ToolExecutionResult toolResult : toolResults) {
                         conversationHistory.add(LlmClient.Message.tool(toolResult.id(), toolResult.result()));
                     }
@@ -215,7 +352,7 @@ public class SubAgent {
                 ));
 
                 streamRenderer.finish();
-                out.println(formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), startNanos));
+                out.println(formatTokenStats(budget, activeToolCount, startNanos));
 
                 return AgentMessage.result(name, role, response.content());
 
@@ -225,6 +362,15 @@ public class SubAgent {
                 return AgentMessage.error(name, role, "LLM 调用失败: " + e.getMessage());
             }
         }
+    }
+
+    private String hookRoleName() {
+        return role == null ? "" : role.name().toLowerCase(Locale.ROOT);
+    }
+
+    private AgentMessage cancelledResult(SubAgentStreamRenderer streamRenderer) {
+        streamRenderer.finish();
+        return AgentMessage.error(name, role, "用户取消了当前子 Agent 任务");
     }
 
     /**
@@ -355,11 +501,26 @@ public class SubAgent {
         }
     }
 
-    private static String formatTokenStats(int inputTokens, int outputTokens, long startNanos) {
+    private static String formatTokenStats(AgentBudget budget, int toolCount, long startNanos) {
         double elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
+        int inputTokens = budget.totalInputTokens();
+        int outputTokens = budget.totalOutputTokens();
+        int cachedTokens = budget.totalCachedTokens();
+        double cacheRate = inputTokens > 0 ? cachedTokens * 100.0 / inputTokens : 0.0;
+        String cacheHint = cachedTokens > 0
+                ? String.format(Locale.ROOT, " | cache %d (%.1f%%)", cachedTokens, cacheRate)
+                : " | cache 0";
+        String contextHint = budget.maxInputTokens() > 0
+                ? String.format(Locale.ROOT, " | ctx %d/%d", budget.maxInputTokens(), budget.contextWindow())
+                : "";
         return AnsiStyle.subtle(String.format(
-                "📊 Token: %d 输入 / %d 输出 / %d 合计 | ⏱ %.1fs",
-                inputTokens, outputTokens, inputTokens + outputTokens, elapsedSeconds));
+                "📊 Token: %d 输入 / %d 输出 / %d 合计%s | effective %d/%d%s | tools %d | ⏱ %.1fs",
+                inputTokens, outputTokens, inputTokens + outputTokens, cacheHint,
+                budget.effectiveTokenUsage(), budget.tokenBudget(), contextHint, toolCount, elapsedSeconds));
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     public String getName() {

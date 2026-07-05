@@ -40,6 +40,16 @@ class CommandGuardTest {
     }
 
     @Test
+    void rejectsObviousWindowsDestructiveCommands() {
+        assertNotNull(CommandGuard.check("rmdir /s /q C:\\"));
+        assertNotNull(CommandGuard.check("rd /s/q C:\\"));
+        assertNotNull(CommandGuard.check("rd /s /q %USERPROFILE%"));
+        assertNotNull(CommandGuard.check("del /s /q C:\\*"));
+        assertNotNull(CommandGuard.check("del /s/q C:\\*.*"));
+        assertNotNull(CommandGuard.check("format C:"));
+    }
+
+    @Test
     void rejectsMkfs() {
         assertNotNull(CommandGuard.check("mkfs.ext4 /dev/sda1"));
         assertNotNull(CommandGuard.check("mkfs /dev/sdb"));

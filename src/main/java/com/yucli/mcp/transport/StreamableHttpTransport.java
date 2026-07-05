@@ -9,9 +9,11 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.BufferedSource;
+
+import com.yucli.mcp.auth.TokenProvider;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -32,14 +34,23 @@ public class StreamableHttpTransport implements McpTransport {
     private final Map<String, String> headers;
     private final List<Consumer<JsonNode>> listeners = new CopyOnWriteArrayList<>();
     private volatile String sessionId;
+    private volatile TokenProvider tokenProvider;
 
     public StreamableHttpTransport(String url, Map<String, String> headers) {
         this.url = url;
         this.headers = headers == null ? Map.of() : Map.copyOf(headers);
     }
 
+    public void setTokenProvider(TokenProvider tokenProvider) {
+        this.tokenProvider = tokenProvider;
+    }
+
     @Override
     public void send(JsonNode message) throws IOException {
+        sendWithRetry(message, false);
+    }
+
+    private void sendWithRetry(JsonNode message, boolean retried) throws IOException {
         RequestBody body = RequestBody.create(MAPPER.writeValueAsString(message), JSON);
         Request.Builder builder = new Request.Builder()
                 .url(url)
@@ -51,8 +62,20 @@ public class StreamableHttpTransport implements McpTransport {
         if (sessionId != null && !sessionId.isBlank()) {
             builder.header("Mcp-Session-Id", sessionId);
         }
+        addOAuthAuthorizationHeader(builder);
 
         try (Response response = client.newCall(builder.build()).execute()) {
+            if (response.code() == 401 && !retried && tokenProvider != null) {
+                response.close();
+                try {
+                    tokenProvider.refreshToken();
+                } catch (Exception refreshEx) {
+                    throw new IOException("OAuth token 刷新失败: " + refreshEx.getMessage(), refreshEx);
+                }
+                sendWithRetry(message, true);
+                return;
+            }
+
             String newSession = response.header("Mcp-Session-Id");
             if (newSession != null && !newSession.isBlank()) {
                 sessionId = newSession;
@@ -65,19 +88,14 @@ public class StreamableHttpTransport implements McpTransport {
                 return;
             }
             String contentType = response.header("Content-Type", "");
-            String raw = responseBody.string();
-            // notification 路径下 server 可以返回 202 + 空 body 或 200 + 空 body。
-            // 这里 swallow 空响应，避免 Jackson 对空字符串抛 MismatchedInputException。
-            if (raw == null || raw.isBlank()) {
-                return;
-            }
-            List<JsonNode> messages = contentType.contains("text/event-stream")
-                    ? parseSse(raw)
-                    : List.of(MAPPER.readTree(raw));
-            for (JsonNode node : messages) {
-                for (Consumer<JsonNode> listener : listeners) {
-                    listener.accept(node);
+            if (contentType.toLowerCase(java.util.Locale.ROOT).contains("text/event-stream")) {
+                streamSse(responseBody, message.path("id").asText(null));
+            } else {
+                String raw = responseBody.string();
+                if (raw == null || raw.isBlank()) {
+                    return;
                 }
+                dispatch(MAPPER.readTree(raw));
             }
         }
     }
@@ -105,6 +123,7 @@ public class StreamableHttpTransport implements McpTransport {
                 .header("Mcp-Session-Id", sessionId)
                 .delete();
         headers.forEach(builder::header);
+        addOAuthAuthorizationHeader(builder);
         // close 是 best-effort：server 已经关停 / 网络不通时不应该让 YuCLI 退出卡住。
         // 主 client 的 callTimeout 是 60s，这里用 5s 短超时单独发请求。
         OkHttpClient closeClient = client.newBuilder()
@@ -118,14 +137,32 @@ public class StreamableHttpTransport implements McpTransport {
         }
     }
 
-    private static List<JsonNode> parseSse(String raw) throws IOException {
-        List<JsonNode> messages = new ArrayList<>();
+    private void addOAuthAuthorizationHeader(Request.Builder builder) {
+        TokenProvider provider = tokenProvider;
+        if (provider != null && provider.isTokenValid()) {
+            builder.header("Authorization", "Bearer " + provider.getAccessToken());
+        }
+    }
+
+    private void streamSse(ResponseBody responseBody, String requestId) throws IOException {
+        BufferedSource source = responseBody.source();
         StringBuilder data = new StringBuilder();
-        for (String line : raw.split("\\R")) {
+        while (true) {
+            String line = source.readUtf8Line();
+            if (line == null) {
+                if (!data.isEmpty()) {
+                    dispatch(MAPPER.readTree(data.toString()));
+                }
+                return;
+            }
             if (line.isBlank()) {
                 if (!data.isEmpty()) {
-                    messages.add(MAPPER.readTree(data.toString()));
+                    JsonNode node = MAPPER.readTree(data.toString());
                     data.setLength(0);
+                    dispatch(node);
+                    if (requestId != null && requestId.equals(node.path("id").asText(null))) {
+                        return;
+                    }
                 }
                 continue;
             }
@@ -134,9 +171,12 @@ public class StreamableHttpTransport implements McpTransport {
                 data.append(line.substring("data:".length()).trim());
             }
         }
-        if (!data.isEmpty()) {
-            messages.add(MAPPER.readTree(data.toString()));
-        }
-        return messages;
     }
+
+    private void dispatch(JsonNode node) {
+        for (Consumer<JsonNode> listener : listeners) {
+            listener.accept(node);
+        }
+    }
+
 }

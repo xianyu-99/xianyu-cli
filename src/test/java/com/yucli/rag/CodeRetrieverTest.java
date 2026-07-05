@@ -74,4 +74,29 @@ class CodeRetrieverTest {
             assertEquals("Agent.run(String userInput)", results.get(0).name());
         }
     }
+
+    @Test
+    void hybridSearchReturnsEmptyForNonPositiveTopK() throws Exception {
+        CodeChunk chunk = CodeChunk.methodChunk(
+                "src/main/java/com/example/Agent.java",
+                "Agent.run(String userInput)",
+                "public void run(String userInput) {}",
+                20, 40
+        );
+        store.insertChunks(List.of(
+                new VectorStore.CodeChunkEntry(chunk, new float[]{1.0f, 0.0f})
+        ));
+
+        EmbeddingClient stubClient = new EmbeddingClient("ollama", "stub", "http://localhost", "") {
+            @Override
+            public float[] embed(String text) {
+                return new float[]{1.0f, 0.0f};
+            }
+        };
+
+        try (CodeRetriever retriever = new CodeRetriever(TEST_PROJECT, stubClient)) {
+            assertEquals(0, retriever.hybridSearch("Agent", 0).size());
+            assertEquals(0, retriever.hybridSearch("Agent", -1).size());
+        }
+    }
 }

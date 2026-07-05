@@ -40,6 +40,17 @@ class CliCommandParserTest {
     }
 
     @Test
+    void parsesExitAliasesBeforeSendingToAgent() {
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("exit").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("quit").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("q").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("bye").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("exiy").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("\u9000\u51fa").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("\u518d\u89c1").type());
+    }
+
+    @Test
     void parsesMemorySlashCommand() {
         CliCommandParser.ParsedCommand command = CliCommandParser.parse("/memory");
 
@@ -202,5 +213,69 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.SKILL_OFF, CliCommandParser.parse("/skill off web-access").type());
         assertEquals("web-access", CliCommandParser.parse("/skill off web-access").payload());
         assertEquals(CliCommandParser.CommandType.SKILL_RELOAD, CliCommandParser.parse("/skill reload").type());
+    }
+
+    @Test
+    void parsesPluginCommands() {
+        assertEquals(CliCommandParser.CommandType.PLUGIN_LIST, CliCommandParser.parse("/plugin").type());
+        assertNull(CliCommandParser.parse("/plugin").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_LIST, CliCommandParser.parse("/plugin list").type());
+        assertNull(CliCommandParser.parse("/plugin list").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_ENABLE, CliCommandParser.parse("/plugin enable my-plugin").type());
+        assertEquals("my-plugin", CliCommandParser.parse("/plugin enable my-plugin").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_DISABLE, CliCommandParser.parse("/plugin disable my-plugin").type());
+        assertEquals("my-plugin", CliCommandParser.parse("/plugin disable my-plugin").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_RELOAD, CliCommandParser.parse("/plugin reload").type());
+        assertNull(CliCommandParser.parse("/plugin reload").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_TEMPLATE, CliCommandParser.parse("/plugin template").type());
+        assertNull(CliCommandParser.parse("/plugin template").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_TEMPLATE,
+                CliCommandParser.parse("/plugin template demo-tools").type());
+        assertEquals("demo-tools", CliCommandParser.parse("/plugin template demo-tools").payload());
+    }
+
+    @Test
+    void parsesLoopStatusCommand() {
+        CliCommandParser.ParsedCommand command = CliCommandParser.parse("/loop");
+
+        assertEquals(CliCommandParser.CommandType.LOOP_STATUS, command.type());
+        assertNull(command.payload());
+    }
+
+    @Test
+    void parsesEvalInfoCommands() {
+        CliCommandParser.ParsedCommand help = CliCommandParser.parse("/eval");
+        CliCommandParser.ParsedCommand cases = CliCommandParser.parse("/eval cases");
+        CliCommandParser.ParsedCommand run = CliCommandParser.parse("/eval run");
+
+        assertEquals(CliCommandParser.CommandType.EVAL_INFO, help.type());
+        assertNull(help.payload());
+        assertEquals(CliCommandParser.CommandType.EVAL_INFO, cases.type());
+        assertEquals("cases", cases.payload());
+        assertEquals(CliCommandParser.CommandType.EVAL_INFO, run.type());
+        assertEquals("run", run.payload());
+    }
+
+    @Test
+    void parsesAgentProfileListCommands() {
+        assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agents").type());
+        assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agents list").type());
+        assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agent list").type());
+    }
+
+    @Test
+    void parsesHookStatusCommands() {
+        assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hooks").type());
+        assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hooks list").type());
+        assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hook list").type());
+    }
+
+    @Test
+    void parsesPermissionCheckpointAndUndoCommands() {
+        assertEquals(CliCommandParser.CommandType.PERMISSION_STATUS, CliCommandParser.parse("/permissions").type());
+        assertEquals(CliCommandParser.CommandType.PERMISSION_STATUS, CliCommandParser.parse("/permission list").type());
+        assertEquals(CliCommandParser.CommandType.CHECKPOINT_STATUS, CliCommandParser.parse("/checkpoint").type());
+        assertEquals(CliCommandParser.CommandType.CHECKPOINT_STATUS, CliCommandParser.parse("/checkpoints").type());
+        assertEquals(CliCommandParser.CommandType.UNDO_LAST, CliCommandParser.parse("/undo").type());
     }
 }

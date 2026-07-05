@@ -46,6 +46,29 @@ class WebFetcherTest {
     }
 
     @Test
+    void rejectsRedirectTargetDeniedByNetworkPolicy() {
+        server.enqueue(new MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", "http://127.0.0.1/admin"));
+
+        NetworkPolicy policy = new NetworkPolicy() {
+            @Override
+            public String checkUrl(String url) {
+                if (url.contains("127.0.0.1")) {
+                    return "blocked redirect target";
+                }
+                return null;
+            }
+        };
+
+        WebFetcher fetcher = new WebFetcher();
+        IOException ex = assertThrows(IOException.class,
+                () -> fetcher.fetch(server.url("/redirect").toString(), policy));
+
+        assertTrue(ex.getMessage().contains("blocked redirect target"));
+    }
+
+    @Test
     void truncatesBodyOverMaxBytes() throws IOException {
         StringBuilder big = new StringBuilder("<html><body>");
         // 10KB 正文

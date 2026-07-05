@@ -1,14 +1,20 @@
 package com.yucli.memory;
 
+import com.yucli.hook.HookDefinition;
+import com.yucli.hook.HookEvent;
+import com.yucli.hook.HookManager;
 import com.yucli.llm.GLMClient;
 import com.yucli.llm.LlmClient;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -38,6 +44,33 @@ class MemoryManagerTest {
         memoryManager.addUserMessage(longMessage);
         memoryManager.addAssistantMessage(longMessage);
 
+        assertTrue(memoryManager.getShortTermMemory().getAll().stream()
+                .anyMatch(entry -> entry.getType() == MemoryEntry.MemoryType.SUMMARY));
+    }
+
+    @Test
+    void shouldRunPreCompactHookBeforeCompression() throws Exception {
+        StubGLMClient llmClient = new StubGLMClient(List.of(
+                new LlmClient.ChatResponse("assistant", "压缩摘要", null, 100, 20)
+        ));
+        Map<HookEvent, List<HookDefinition>> hooks = new EnumMap<>(HookEvent.class);
+        hooks.put(HookEvent.PRE_COMPACT, List.of(
+                new HookDefinition("short_term", List.of("echo precompact>>memory-hooks.log"), 3)));
+        MemoryManager memoryManager = new MemoryManager(
+                llmClient,
+                40,
+                32000,
+                new LongTermMemory(tempDir.toFile())
+        );
+        memoryManager.setHookManager(new HookManager(hooks, tempDir));
+        String longMessage = "a".repeat(36);
+
+        memoryManager.addUserMessage(longMessage);
+        memoryManager.addAssistantMessage(longMessage);
+        memoryManager.addUserMessage(longMessage);
+        memoryManager.addAssistantMessage(longMessage);
+
+        assertTrue(Files.readString(tempDir.resolve("memory-hooks.log")).contains("precompact"));
         assertTrue(memoryManager.getShortTermMemory().getAll().stream()
                 .anyMatch(entry -> entry.getType() == MemoryEntry.MemoryType.SUMMARY));
     }

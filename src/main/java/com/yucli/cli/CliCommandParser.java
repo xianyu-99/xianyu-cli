@@ -9,6 +9,10 @@ final class CliCommandParser {
         EXIT,
         CLEAR,
         SWITCH_MODEL,
+        LOOP_STATUS,
+        EVAL_INFO,
+        AGENT_LIST,
+        HOOK_STATUS,
         SWITCH_PLAN,
         SWITCH_TEAM,
         SWITCH_HITL,
@@ -20,6 +24,9 @@ final class CliCommandParser {
         GRAPH_QUERY,
         CONTEXT_STATUS,
         POLICY_STATUS,
+        PERMISSION_STATUS,
+        CHECKPOINT_STATUS,
+        UNDO_LAST,
         AUDIT_TAIL,
         MCP_LIST,
         MCP_RESTART,
@@ -28,12 +35,26 @@ final class CliCommandParser {
         MCP_ENABLE,
         MCP_RESOURCES,
         MCP_PROMPTS,
+        MCP_AUTH,
+        MCP_AUTH_STATUS,
+        MCP_AUTH_REVOKE,
         BROWSER_STATUS,
         SKILL_LIST,
         SKILL_ON,
         SKILL_OFF,
         SKILL_RELOAD,
-        TUI_LAUNCH
+        TUI_LAUNCH,
+        PLUGIN_LIST,
+        PLUGIN_ENABLE,
+        PLUGIN_DISABLE,
+        PLUGIN_RELOAD,
+        PLUGIN_TEMPLATE,
+        SESSION_LIST,
+        SESSION_SAVE,
+        SESSION_LOAD,
+        SESSION_DELETE,
+        SESSION_EXPORT,
+        RESUME
     }
 
     record ParsedCommand(CommandType type, String payload) {
@@ -55,10 +76,7 @@ final class CliCommandParser {
             return ParsedCommand.none();
         }
 
-        if (trimmed.equalsIgnoreCase("/exit")
-                || trimmed.equalsIgnoreCase("/quit")
-                || trimmed.equalsIgnoreCase("exit")
-                || trimmed.equalsIgnoreCase("quit")) {
+        if (isExitCommand(trimmed)) {
             return new ParsedCommand(CommandType.EXIT, null);
         }
 
@@ -76,6 +94,28 @@ final class CliCommandParser {
 
         if (trimmed.regionMatches(true, 0, "/model ", 0, 7)) {
             return new ParsedCommand(CommandType.SWITCH_MODEL, trimmed.substring(7).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/loop")) {
+            return new ParsedCommand(CommandType.LOOP_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/eval")) {
+            return new ParsedCommand(CommandType.EVAL_INFO, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/eval ", 0, 6)) {
+            return new ParsedCommand(CommandType.EVAL_INFO, trimmed.substring(6).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/agents") || trimmed.equalsIgnoreCase("/agents list")
+                || trimmed.equalsIgnoreCase("/agent list")) {
+            return new ParsedCommand(CommandType.AGENT_LIST, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/hooks") || trimmed.equalsIgnoreCase("/hooks list")
+                || trimmed.equalsIgnoreCase("/hook list")) {
+            return new ParsedCommand(CommandType.HOOK_STATUS, null);
         }
 
         if (trimmed.equalsIgnoreCase("/plan")) {
@@ -154,6 +194,19 @@ final class CliCommandParser {
             return new ParsedCommand(CommandType.POLICY_STATUS, null);
         }
 
+        if (trimmed.equalsIgnoreCase("/permissions") || trimmed.equalsIgnoreCase("/permission")
+                || trimmed.equalsIgnoreCase("/permissions list") || trimmed.equalsIgnoreCase("/permission list")) {
+            return new ParsedCommand(CommandType.PERMISSION_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/checkpoint") || trimmed.equalsIgnoreCase("/checkpoints")) {
+            return new ParsedCommand(CommandType.CHECKPOINT_STATUS, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/undo")) {
+            return new ParsedCommand(CommandType.UNDO_LAST, null);
+        }
+
         if (trimmed.equalsIgnoreCase("/audit")) {
             return new ParsedCommand(CommandType.AUDIT_TAIL, null);
         }
@@ -190,6 +243,18 @@ final class CliCommandParser {
             return new ParsedCommand(CommandType.MCP_ENABLE, trimmed.substring(12).trim());
         }
 
+        if (trimmed.equalsIgnoreCase("/mcp auth status")) {
+            return new ParsedCommand(CommandType.MCP_AUTH_STATUS, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/mcp auth revoke ", 0, 17)) {
+            return new ParsedCommand(CommandType.MCP_AUTH_REVOKE, trimmed.substring(17).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/mcp auth ", 0, 10)) {
+            return new ParsedCommand(CommandType.MCP_AUTH, trimmed.substring(10).trim());
+        }
+
         if (trimmed.equalsIgnoreCase("/browser")) {
             return new ParsedCommand(CommandType.BROWSER_STATUS, null);
         }
@@ -214,10 +279,74 @@ final class CliCommandParser {
             return new ParsedCommand(CommandType.TUI_LAUNCH, null);
         }
 
+        if (trimmed.equalsIgnoreCase("/plugin") || trimmed.equalsIgnoreCase("/plugin list")) {
+            return new ParsedCommand(CommandType.PLUGIN_LIST, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/plugin enable ", 0, 15)) {
+            return new ParsedCommand(CommandType.PLUGIN_ENABLE, trimmed.substring(15).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/plugin disable ", 0, 16)) {
+            return new ParsedCommand(CommandType.PLUGIN_DISABLE, trimmed.substring(16).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/plugin reload")) {
+            return new ParsedCommand(CommandType.PLUGIN_RELOAD, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/plugin template")) {
+            return new ParsedCommand(CommandType.PLUGIN_TEMPLATE, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/plugin template ", 0, 17)) {
+            return new ParsedCommand(CommandType.PLUGIN_TEMPLATE, trimmed.substring(17).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/session") || trimmed.equalsIgnoreCase("/session list")) {
+            return new ParsedCommand(CommandType.SESSION_LIST, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/session save")) {
+            return new ParsedCommand(CommandType.SESSION_SAVE, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session save ", 0, 14)) {
+            return new ParsedCommand(CommandType.SESSION_SAVE, trimmed.substring(14).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session load ", 0, 14)) {
+            return new ParsedCommand(CommandType.SESSION_LOAD, trimmed.substring(14).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session delete ", 0, 16)) {
+            return new ParsedCommand(CommandType.SESSION_DELETE, trimmed.substring(16).trim());
+        }
+
+        if (trimmed.regionMatches(true, 0, "/session export ", 0, 16)) {
+            return new ParsedCommand(CommandType.SESSION_EXPORT, trimmed.substring(16).trim());
+        }
+
+        if (trimmed.equalsIgnoreCase("/resume")) {
+            return new ParsedCommand(CommandType.RESUME, null);
+        }
+
         if (trimmed.startsWith("/")) {
             return new ParsedCommand(CommandType.UNKNOWN_COMMAND, trimmed);
         }
 
         return ParsedCommand.none();
+    }
+
+    private static boolean isExitCommand(String trimmed) {
+        return trimmed.equalsIgnoreCase("/exit")
+                || trimmed.equalsIgnoreCase("/quit")
+                || trimmed.equalsIgnoreCase("exit")
+                || trimmed.equalsIgnoreCase("quit")
+                || trimmed.equalsIgnoreCase("q")
+                || trimmed.equalsIgnoreCase("bye")
+                || trimmed.equalsIgnoreCase("exiy")
+                || trimmed.equals("\u9000\u51fa")
+                || trimmed.equals("\u518d\u89c1");
     }
 }

@@ -24,6 +24,12 @@ public final class CommandGuard {
             new DenyRule("禁止 rm -rf 删除全盘或用户目录",
                     Pattern.compile("(?i)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+(/|~|\\$home)|" +
                             "\\brm\\s+-[a-z]*f[a-z]*r[a-z]*\\s+(/|~|\\$home)")),
+            new DenyRule("Deny Windows recursive removal of drive root or user profile",
+                    Pattern.compile("(?i)\\b(rmdir|rd)\\b(?=[^\\n]*/s\\b)(?=[^\\n]*/q\\b)[^\\n]*\\s([a-z]:(?:\\\\|/)|%userprofile%)(?:\\s|$)")),
+            new DenyRule("Deny Windows recursive delete of drive root",
+                    Pattern.compile("(?i)\\bdel\\b(?=[^\\n]*/s\\b)(?=[^\\n]*/q\\b)[^\\n]*\\s+[a-z]:(?:\\\\|/)\\*(?:\\.\\*)?(?:\\s|$)")),
+            new DenyRule("Deny Windows format of drive letter",
+                    Pattern.compile("(?i)\\bformat\\s+[a-z]:(?:\\s|$)")),
             new DenyRule("禁止 mkfs 格式化磁盘",
                     Pattern.compile("(?i)\\bmkfs(\\.|\\b)")),
             new DenyRule("禁止 dd 写入裸设备",

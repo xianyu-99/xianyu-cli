@@ -10,7 +10,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 对话面板：展示聊天历史与输入框。
+ * 左侧对话面板：展示聊天历史与输入框。
  */
 public class ChatPanel {
 
@@ -48,12 +48,29 @@ public class ChatPanel {
         panel.addComponent(inputArea, BorderLayout.Location.BOTTOM);
 
         // 初始欢迎消息
-        context.addChatMessage("system", "欢迎使用 YuCLI TUI！输入消息后点击发送。");
+        context.addChatMessage("system", "欢迎使用 YuCLI TUI！左侧输入对话，右侧浏览文件、代码和配置。");
+        context.onAction(action -> {
+            if ("send".equals(action)) {
+                doSend();
+            }
+        });
         refreshHistory();
     }
 
     public Component getComponent() {
         return panel;
+    }
+
+    public void takeFocus() {
+        inputBox.takeFocus();
+    }
+
+    public void shutdown() {
+        executor.shutdownNow();
+    }
+
+    boolean isShutdown() {
+        return executor.isShutdown();
     }
 
     /**
@@ -84,6 +101,10 @@ public class ChatPanel {
      */
     public String getInputText() {
         return inputBox.getText();
+    }
+
+    void setInputText(String text) {
+        inputBox.setText(text == null ? "" : text);
     }
 
     /**

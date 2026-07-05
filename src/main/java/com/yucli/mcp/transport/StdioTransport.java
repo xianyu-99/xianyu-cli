@@ -28,6 +28,7 @@ public class StdioTransport implements McpTransport {
     private final ArrayDeque<String> stderrRing = new ArrayDeque<>();
     private final Object stderrLock = new Object();
     private volatile boolean closed;
+    private volatile Runnable onExitCallback;
 
     public StdioTransport(String command, List<String> args, Map<String, String> env, Path workingDir) throws IOException {
         List<String> commandLine = new ArrayList<>();
@@ -42,7 +43,11 @@ public class StdioTransport implements McpTransport {
         if (env != null && !env.isEmpty()) {
             builder.environment().putAll(env);
         }
-        this.process = builder.start();
+        try {
+            this.process = builder.start();
+        } catch (IOException e) {
+            throw new IOException("Failed to start MCP process [" + String.join(" ", commandLine) + "]: " + e.getMessage(), e);
+        }
         this.stdin = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
         startStdoutReader();
         startStderrReader();
@@ -80,6 +85,14 @@ public class StdioTransport implements McpTransport {
     @Override
     public String transportName() {
         return "stdio";
+    }
+
+    public void onExit(Runnable callback) {
+        this.onExitCallback = callback;
+    }
+
+    public boolean isAlive() {
+        return process.isAlive();
     }
 
     @Override
@@ -128,6 +141,10 @@ public class StdioTransport implements McpTransport {
                 }
             } catch (Exception e) {
                 appendStderr("[YuCLI] stdout reader stopped: " + e.getMessage());
+            }
+            // Process exited (stdout closed)
+            if (!closed && onExitCallback != null) {
+                onExitCallback.run();
             }
         }, "YuCLI-mcp-stdio-stdout");
         thread.setDaemon(true);

@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 
 public class McpClient implements AutoCloseable {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final int MAX_RESOURCE_TEXT_CHARS = 200_000;
 
     private final String serverName;
     private final JsonRpcClient rpc;
@@ -168,6 +169,10 @@ public class McpClient implements AutoCloseable {
         rpc.onNotification(listener);
     }
 
+    public void onSamplingRequest(java.util.function.Function<JsonNode, JsonNode> handler) {
+        rpc.onRequest("sampling/createMessage", handler);
+    }
+
     public static String formatResources(List<McpResourceDescriptor> resources) {
         if (resources == null || resources.isEmpty()) {
             return "📭 该 MCP server 暂无 resources";
@@ -202,7 +207,7 @@ public class McpClient implements AutoCloseable {
             sb.append("<resource uri=\"").append(escapeXml(content.uri()))
                     .append("\" mimeType=\"").append(escapeXml(mimeType)).append("\">\n");
             if (content.isText()) {
-                sb.append(content.text());
+                sb.append(truncateResourceText(content.text()));
             } else {
                 sb.append("[binary resource blob omitted, base64 length=")
                         .append(content.blob() == null ? 0 : content.blob().length())
@@ -211,6 +216,15 @@ public class McpClient implements AutoCloseable {
             sb.append("\n</resource>\n");
         }
         return sb.toString().trim();
+    }
+
+    private static String truncateResourceText(String text) {
+        if (text == null || text.length() <= MAX_RESOURCE_TEXT_CHARS) {
+            return text;
+        }
+        return text.substring(0, MAX_RESOURCE_TEXT_CHARS)
+                + "\n[resource truncated by YuCLI at " + MAX_RESOURCE_TEXT_CHARS
+                + " chars; original length=" + text.length() + "]";
     }
 
     private static String escapeXml(String value) {

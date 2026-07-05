@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # YuCLI Launcher Script for Unix/Linux/macOS
-# https://github.com/yucli/paicli
+# https://github.com/xianyu-99/xianyu-cli
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 JAR_PATH="${APP_DIR}/lib/YuCLI.jar"

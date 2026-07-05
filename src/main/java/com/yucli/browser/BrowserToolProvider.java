@@ -7,9 +7,12 @@ import java.util.Map;
  * 浏览器工具提供者。
  *
  * 封装浏览器操控工具，管理 Chrome 进程和 CDP 会话生命周期。
- * 提供 6 个核心工具：navigate、screenshot、click、type、evaluate、get_dom。
+ * 提供浏览器导航、截图、点击、输入、执行脚本、读取 DOM、标签页管理和关闭能力。
  */
 public class BrowserToolProvider {
+
+    private static final int DEFAULT_DOM_SUMMARY_MAX_LENGTH = 8000;
+    private static final int MAX_DOM_SUMMARY_MAX_LENGTH = 20000;
 
     private final ChromeLauncher launcher;
     private ChromeDiscovery discovery;
@@ -38,17 +41,45 @@ public class BrowserToolProvider {
             discovery = new ChromeDiscovery(port);
         }
 
-        String wsUrl = discovery.getWebSocketDebuggerUrl();
-        wsClient = new CdpWebSocketClient();
-        wsClient.connect(wsUrl).get();
+        return connectToWebSocket(discovery.getWebSocketDebuggerUrl());
+    }
 
-        // 启用必要域
-        wsClient.sendSync("Page.enable", null);
-        wsClient.sendSync("Runtime.enable", null);
-        wsClient.sendSync("DOM.enable", null);
+    private synchronized CdpSession connectToWebSocket(String wsUrl) throws Exception {
+        CdpWebSocketClient newClient = new CdpWebSocketClient();
+        newClient.connect(wsUrl).get();
+        try {
+            enableCoreDomains(newClient);
+        } catch (Exception e) {
+            try {
+                newClient.close().get();
+            } catch (Exception ignored) {
+            }
+            throw e;
+        }
 
-        session = new CdpSession(wsClient);
+        CdpWebSocketClient oldClient = wsClient;
+        wsClient = newClient;
+        session = new CdpSession(newClient);
+        if (oldClient != null && oldClient != newClient) {
+            try {
+                oldClient.close().get();
+            } catch (Exception ignored) {
+            }
+        }
         return session;
+    }
+
+    private void enableCoreDomains(CdpWebSocketClient client) throws Exception {
+        client.sendSync("Page.enable", null);
+        client.sendSync("Runtime.enable", null);
+        client.sendSync("DOM.enable", null);
+    }
+
+    void reconnectToTarget(String targetId) throws Exception {
+        if (discovery == null) {
+            throw new IllegalStateException("Chrome discovery 未初始化");
+        }
+        connectToWebSocket(discovery.getWebSocketDebuggerUrl(targetId));
     }
 
     public synchronized void close() {
@@ -60,7 +91,17 @@ public class BrowserToolProvider {
             wsClient = null;
         }
         session = null;
-        launcher.kill();
+        if (launcher != null) {
+            launcher.kill();
+        }
+    }
+
+    // Visible for testing
+    void setSession(CdpSession session) {
+        this.session = session;
+        if (session != null) {
+            this.wsClient = session.getClient();
+        }
     }
 
     // ---- 工具实现 ----
@@ -80,7 +121,7 @@ public class BrowserToolProvider {
             s.navigate(url, waitForLoad);
 
             String currentUrl = s.getCurrentUrl();
-            return "✅ 已导航到: " + currentUrl;
+            return withDomSummary("✅ 已导航到: " + currentUrl, s, args);
         } catch (Exception e) {
             return "❌ 导航失败: " + e.getMessage();
         }
@@ -102,8 +143,9 @@ public class BrowserToolProvider {
             java.nio.file.Path path = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), filename);
             java.nio.file.Files.write(path, Base64.getDecoder().decode(base64));
 
+            String scope = selector != null && !selector.isBlank() ? "元素" : (fullPage ? "全页" : "视口");
             return "✅ 截图已保存: " + path.toAbsolutePath() +
-                    "\n尺寸: " + (fullPage ? "全页" : "视口") +
+                    "\n尺寸: " + scope +
                     (selector != null ? " (元素: " + selector + ")" : "");
         } catch (Exception e) {
             return "❌ 截图失败: " + e.getMessage();
@@ -122,7 +164,7 @@ public class BrowserToolProvider {
 
             CdpSession s = ensureSession();
             s.click(selector);
-            return "✅ 已点击元素: " + selector;
+            return withDomSummary("✅ 已点击元素: " + selector, s, args);
         } catch (Exception e) {
             return "❌ 点击失败: " + e.getMessage();
         }
@@ -145,7 +187,7 @@ public class BrowserToolProvider {
 
             CdpSession s = ensureSession();
             s.type(selector, text, submit);
-            return "✅ 已在 " + selector + " 中输入文本" + (submit ? " 并提交" : "");
+            return withDomSummary("✅ 已在 " + selector + " 中输入文本" + (submit ? " 并提交" : ""), s, args);
         } catch (Exception e) {
             return "❌ 输入失败: " + e.getMessage();
         }
@@ -226,11 +268,13 @@ public class BrowserToolProvider {
                         yield "错误：switch 操作需要 target_id 参数";
                     }
                     s.switchToTab(targetId);
+                    reconnectToTarget(targetId);
                     yield "✅ 已切换到标签页: " + targetId;
                 }
                 case "new" -> {
                     String url = args.getOrDefault("url", "about:blank");
                     String newId = s.createTab(url);
+                    reconnectToTarget(newId);
                     yield "✅ 已创建新标签页: " + newId + " (" + url + ")";
                 }
                 case "close" -> {
@@ -278,6 +322,35 @@ public class BrowserToolProvider {
             return sb.toString().trim();
         } catch (Exception e) {
             return "浏览器已连接，但获取状态失败: " + e.getMessage();
+        }
+    }
+
+    private String withDomSummary(String successMessage, CdpSession session, Map<String, String> args) {
+        if (!shouldIncludeDomSummary(args)) {
+            return successMessage;
+        }
+        try {
+            return successMessage + "\n\nDOM 摘要:\n" + session.getCleanDom(parseDomSummaryMaxLength(args));
+        } catch (Exception e) {
+            return successMessage + "\n\nDOM 摘要获取失败: " + e.getMessage();
+        }
+    }
+
+    private boolean shouldIncludeDomSummary(Map<String, String> args) {
+        String value = args.getOrDefault("include_dom_summary", args.getOrDefault("dom_summary", "true")).trim();
+        return !("false".equalsIgnoreCase(value) || "0".equals(value) || "no".equalsIgnoreCase(value));
+    }
+
+    private int parseDomSummaryMaxLength(Map<String, String> args) {
+        String value = args.get("dom_summary_max_length");
+        if (value == null || value.isBlank()) {
+            return DEFAULT_DOM_SUMMARY_MAX_LENGTH;
+        }
+        try {
+            int maxLength = Integer.parseInt(value.trim());
+            return Math.max(0, Math.min(maxLength, MAX_DOM_SUMMARY_MAX_LENGTH));
+        } catch (NumberFormatException e) {
+            return DEFAULT_DOM_SUMMARY_MAX_LENGTH;
         }
     }
 }

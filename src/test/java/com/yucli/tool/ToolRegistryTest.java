@@ -1,15 +1,22 @@
 package com.yucli.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.yucli.policy.PermissionProfile;
+import com.yucli.routing.IntentDecision;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolRegistryTest {
@@ -22,11 +29,9 @@ class ToolRegistryTest {
             ToolRegistry registry = new ToolRegistry();
             registry.setProjectPath(tempDir.toString());
 
-            // execute_command 在内部用 bash -c 执行，pwd 在 bash 中可用
-            String result = registry.executeTool("execute_command", "{\"command\":\"pwd\"}");
+            String command = isWindows() ? "cd" : "pwd";
+            String result = registry.executeTool("execute_command", "{\"command\":\"" + command + "\"}");
 
-            // bash 在 Windows 上可能输出 /c/Users/... 或 /mnt/c/Users/...
-            // 所以检查项目路径的最后一级目录名即可
             assertTrue(result.contains(tempDir.getFileName().toString()),
                     "命令输出应包含目录名: " + result);
         } finally {
@@ -45,6 +50,84 @@ class ToolRegistryTest {
     }
 
     @Test
+    void shouldRejectUnknownProjectTypeWithoutCreatingDirectory() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+
+            String result = registry.executeTool("create_project",
+                    "{\"name\":\"bad-project\",\"type\":\"ruby\"}");
+
+            assertTrue(result.contains("不支持的项目类型"), "实际输出: " + result);
+            assertFalse(Files.exists(tempDir.resolve("bad-project")));
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("bad-project")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void permissionProfileDenyBlocksToolExecution() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+            registry.setPermissionProfile(new PermissionProfile(
+                    "default",
+                    List.of(),
+                    List.of("write_file"),
+                    List.of()
+            ));
+
+            String result = registry.executeTool("write_file",
+                    "{\"path\":\"blocked.txt\",\"content\":\"x\"}");
+
+            assertTrue(result.startsWith("[Permission]"), "实际输出: " + result);
+            assertFalse(Files.exists(tempDir.resolve("blocked.txt")));
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("blocked.txt")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void enabledCheckpointingRestoresPreviousWrite() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            Path target = tempDir.resolve("note.txt");
+            Files.writeString(target, "old");
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+            registry.enableCheckpointing(tempDir.resolve("checkpoints"));
+
+            String writeResult = registry.executeTool("write_file",
+                    "{\"path\":\"note.txt\",\"content\":\"new\"}");
+            assertTrue(writeResult.contains("checkpoint:"), "实际输出: " + writeResult);
+            assertEquals("new", Files.readString(target));
+
+            String undoResult = registry.restoreLastCheckpoint();
+
+            assertTrue(undoResult.contains("Restored checkpoint"), "实际输出: " + undoResult);
+            assertEquals("old", Files.readString(target));
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("note.txt")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void shouldNormalizeSearchCodeTopKWithinSupportedRange() {
+        assertEquals(5, ToolRegistry.normalizeSearchTopK(null));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK(""));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK("abc"));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK("0"));
+        assertEquals(5, ToolRegistry.normalizeSearchTopK("-3"));
+        assertEquals(7, ToolRegistry.normalizeSearchTopK("7"));
+        assertEquals(20, ToolRegistry.normalizeSearchTopK("100"));
+    }
+
+    @Test
     void shouldTimeoutLongRunningCommandWithoutHanging() throws Exception {
         // 手动创建目录避免 @TempDir 在 Windows 上的清理问题
         Path tempDir = Files.createTempDirectory("YuCLI-test-");
@@ -52,8 +135,8 @@ class ToolRegistryTest {
             ToolRegistry registry = new ToolRegistry(1);
             registry.setProjectPath(tempDir.toString());
 
-            // execute_command 内部用 bash -c 执行，sleep 在 bash 中通用
-            String result = registry.executeTool("execute_command", "{\"command\":\"sleep 2\"}");
+            String command = isWindows() ? "ping -n 3 127.0.0.1 > nul" : "sleep 2";
+            String result = registry.executeTool("execute_command", "{\"command\":\"" + command + "\"}");
 
             assertTrue(result.contains("命令执行超时"), "预期超时，实际输出: " + result);
         } finally {
@@ -96,6 +179,20 @@ class ToolRegistryTest {
     }
 
     @Test
+    void shouldUseNativeShellForCurrentOperatingSystem() {
+        List<String> commandLine = ToolRegistry.shellCommand("echo ok");
+
+        if (isWindows()) {
+            assertEquals("cmd.exe", commandLine.get(0));
+            assertEquals("/c", commandLine.get(1));
+        } else {
+            assertEquals("bash", commandLine.get(0));
+            assertEquals("-c", commandLine.get(1));
+        }
+        assertEquals("echo ok", commandLine.get(2));
+    }
+
+    @Test
     void shouldCancelToolInvocationWhenBatchTimeoutIsReached() {
         ToolRegistry registry = new ToolRegistry(1, 1) {
             @Override
@@ -119,5 +216,116 @@ class ToolRegistryTest {
         assertTrue(results.get(0).timedOut());
         assertTrue(results.get(0).result().contains("工具执行超时"));
         assertEquals("result-fast", results.get(1).result());
+    }
+
+    @Test
+    void browserInteractionToolsExposeDomSummaryControls() {
+        ToolRegistry registry = new ToolRegistry();
+
+        assertDomSummaryControls(registry, "browser_navigate");
+        assertDomSummaryControls(registry, "browser_click");
+        assertDomSummaryControls(registry, "browser_type");
+    }
+
+    @Test
+    void readFileSupportsLineRangesAndTruncation() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            Path file = tempDir.resolve("large.txt");
+            StringBuilder content = new StringBuilder();
+            for (int i = 1; i <= 200; i++) {
+                content.append("line-").append(i).append(" abcdefghijklmnopqrstuvwxyz\n");
+            }
+            Files.writeString(file, content);
+
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+
+            String ranged = registry.executeTool("read_file",
+                    "{\"path\":\"large.txt\",\"start_line\":10,\"end_line\":12}");
+            assertTrue(ranged.contains("line-10"), ranged);
+            assertTrue(ranged.contains("line-12"), ranged);
+            assertFalse(ranged.contains("line-13"), ranged);
+
+            String truncated = registry.executeTool("read_file",
+                    "{\"path\":\"large.txt\",\"max_chars\":120}");
+            assertTrue(truncated.contains("内容已截断"), truncated);
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("large.txt")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void promptScopedToolDefinitionsKeepDefaultSetSmall() {
+        ToolRegistry registry = new ToolRegistry();
+
+        List<String> defaultTools = registry.getToolDefinitions("解释这个项目").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+        assertTrue(defaultTools.contains("read_file"));
+        assertTrue(defaultTools.contains("list_dir"));
+        assertTrue(defaultTools.contains("search_code"));
+        assertFalse(defaultTools.contains("execute_command"));
+        assertFalse(defaultTools.contains("web_search"));
+
+        List<String> codingTools = registry.getToolDefinitions("修改代码后运行 mvn test").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+        assertTrue(codingTools.contains("write_file"));
+        assertTrue(codingTools.contains("execute_command"));
+
+        List<String> webTools = registry.getToolDefinitions("打开 https://example.com 看最新文档").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+        assertTrue(webTools.contains("web_search"));
+        assertTrue(webTools.contains("web_fetch"));
+    }
+
+    @Test
+    void promptScopedToolDefinitionsCanUseIntentRouterForWebAndCommand() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.setIntentRouter(prompt -> Optional.of(new IntentDecision(Set.of(),
+                false, true, true, false, false, false,
+                "medium", 0.9, "needs verification and lookup")));
+
+        List<String> routedTools = registry.getToolDefinitions("帮我做一次完整核验并查资料").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+
+        assertTrue(routedTools.contains("execute_command"));
+        assertTrue(routedTools.contains("web_search"));
+        assertTrue(routedTools.contains("web_fetch"));
+    }
+
+    @Test
+    void promptScopedToolDefinitionsCanUseIntentRouterSuggestedTools() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.setIntentRouter(prompt -> Optional.of(new IntentDecision(Set.of("browser_screenshot"),
+                false, false, false, false, false, false,
+                "low", 0.8, "screenshot requested")));
+
+        List<String> routedTools = registry.getToolDefinitions("看看现在画面是否正常").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+
+        assertTrue(routedTools.contains("browser_screenshot"));
+        assertFalse(routedTools.contains("browser_click"));
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase().contains("win");
+    }
+
+    private static void assertDomSummaryControls(ToolRegistry registry, String toolName) {
+        JsonNode properties = registry.getToolDefinitions().stream()
+                .filter(tool -> tool.name().equals(toolName))
+                .findFirst()
+                .orElseThrow()
+                .parameters()
+                .path("properties");
+
+        assertNotNull(properties.get("include_dom_summary"), toolName + " 应声明 include_dom_summary");
+        assertNotNull(properties.get("dom_summary_max_length"), toolName + " 应声明 dom_summary_max_length");
     }
 }

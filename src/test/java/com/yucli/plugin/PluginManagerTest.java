@@ -1,0 +1,296 @@
+package com.yucli.plugin;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.yucli.tool.ToolRegistry;
+import com.yucli.web.SearchProvider;
+import com.yucli.web.SearchResult;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class PluginManagerTest {
+
+    private static final ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+
+    @TempDir
+    Path tempDir;
+
+    @Test
+    void shouldSaveAndLoadPersistedState() throws IOException {
+        Path stateFile = tempDir.resolve("plugins.json");
+        Map<String, Boolean> state = Map.of("test-plugin", true, "disabled-plugin", false);
+        mapper.writeValue(stateFile.toFile(), state);
+
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        assertTrue(stateFile.toFile().exists());
+        Map<String, Boolean> loaded = mapper.readValue(stateFile.toFile(), Map.class);
+        assertTrue(loaded.get("test-plugin"));
+        assertFalse(loaded.get("disabled-plugin"));
+    }
+
+    @Test
+    void shouldNotEnablePluginWhenPersistedAsDisabled() throws IOException {
+        Path stateFile = tempDir.resolve("plugins.json");
+        Map<String, Boolean> state = Map.of("my-plugin", false);
+        mapper.writeValue(stateFile.toFile(), state);
+
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        Map<String, Boolean> loaded = mapper.readValue(stateFile.toFile(), Map.class);
+        assertFalse(loaded.get("my-plugin"));
+    }
+
+    @Test
+    void shouldTrackPluginStateTransitions() {
+        TestPlugin plugin = new TestPlugin();
+        PluginInfo info = new PluginInfo(plugin, PluginState.LOADED, "test.jar", null);
+
+        assertEquals(PluginState.LOADED, info.state());
+        info.setState(PluginState.ENABLED);
+        assertEquals(PluginState.ENABLED, info.state());
+        info.setState(PluginState.DISABLED);
+        assertEquals(PluginState.DISABLED, info.state());
+        info.setState(PluginState.ERROR);
+        assertEquals(PluginState.ERROR, info.state());
+    }
+
+    @Test
+    void shouldCreatePluginContextWithConfigDir() {
+        ToolRegistry registry = new ToolRegistry();
+        PluginContext context = new PluginContext(registry, tempDir, "test-plugin");
+
+        assertEquals(tempDir, context.getConfigDir());
+    }
+
+    @Test
+    void shouldListEmptyPluginsWhenNoJarsExist() {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        assertTrue(manager.listPlugins().isEmpty());
+    }
+
+    @Test
+    void shouldThrowWhenEnablingNonexistentPlugin() {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        assertThrows(IllegalArgumentException.class, () -> manager.enablePlugin("nonexistent"));
+    }
+
+    @Test
+    void shouldThrowWhenDisablingNonexistentPlugin() {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        assertThrows(IllegalArgumentException.class, () -> manager.disablePlugin("nonexistent"));
+    }
+
+    @Test
+    void shouldThrowWhenUnloadingNonexistentPlugin() {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        assertThrows(IllegalArgumentException.class, () -> manager.unloadPlugin("nonexistent"));
+    }
+
+    @Test
+    void shouldLoadPersistedStateFromFile() throws IOException {
+        Path stateFile = tempDir.resolve("plugins.json");
+        Map<String, Boolean> state = Map.of("enabled-one", true, "disabled-one", false);
+        mapper.writeValue(stateFile.toFile(), state);
+
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        Map<String, Boolean> reloaded = mapper.readValue(stateFile.toFile(), Map.class);
+        assertEquals(2, reloaded.size());
+        assertTrue(reloaded.get("enabled-one"));
+        assertFalse(reloaded.get("disabled-one"));
+    }
+
+    @Test
+    void shouldSaveStateOnEnable() throws IOException {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+
+        Path pluginsDir = tempDir.resolve("plugins");
+        Files.createDirectories(pluginsDir);
+
+        Path stateFile = tempDir.resolve("plugins.json");
+        assertFalse(Files.exists(stateFile));
+    }
+
+    @Test
+    void enableAfterDisableRestoresPluginTools() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+        RegisteringPlugin plugin = new RegisteringPlugin();
+        PluginContext context = PluginContext.deferred(registry, tempDir, plugin.name());
+        plugin.onLoad(context);
+        assertFalse(registry.hasTool("plugin__demo__ping"));
+        putPlugin(manager, plugin.name(), new PluginInfo(plugin, PluginState.LOADED, "test.jar", null,
+                context.toolDeclarations()));
+
+        manager.enablePlugin("demo");
+        assertTrue(registry.hasTool("plugin__demo__ping"));
+
+        manager.disablePlugin("demo");
+        assertFalse(registry.hasTool("plugin__demo__ping"));
+
+        manager.enablePlugin("demo");
+        assertTrue(registry.hasTool("plugin__demo__ping"));
+    }
+
+    @Test
+    void deferredContextDoesNotApplySearchProviderDuringLoad() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        PluginContext context = PluginContext.deferred(registry, tempDir, "search-demo");
+
+        context.registerSearchProvider(new FakeSearchProvider("plugin-search"));
+
+        assertNull(readSearchProvider(registry));
+    }
+
+    @Test
+    void enableAfterDisableControlsPluginSearchProvider() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        PluginManager manager = new PluginManager(registry, tempDir);
+        SearchProviderPlugin plugin = new SearchProviderPlugin();
+        PluginContext context = PluginContext.deferred(registry, tempDir, plugin.name());
+        plugin.onLoad(context);
+        putPlugin(manager, plugin.name(), new PluginInfo(plugin, PluginState.LOADED, "test.jar", null,
+                context.toolDeclarations(), context.searchProvider()));
+
+        manager.enablePlugin("search-demo");
+        assertSame(plugin.provider, readSearchProvider(registry));
+
+        manager.disablePlugin("search-demo");
+        assertNull(readSearchProvider(registry));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void putPlugin(PluginManager manager, String name, PluginInfo info) throws Exception {
+        Field field = PluginManager.class.getDeclaredField("plugins");
+        field.setAccessible(true);
+        ((Map<String, PluginInfo>) field.get(manager)).put(name, info);
+    }
+
+    private static SearchProvider readSearchProvider(ToolRegistry registry) throws Exception {
+        Field field = ToolRegistry.class.getDeclaredField("searchProvider");
+        field.setAccessible(true);
+        return (SearchProvider) field.get(registry);
+    }
+
+    static class TestPlugin implements YuPlugin {
+        private boolean enabled = false;
+        private boolean loaded = false;
+        private boolean unloaded = false;
+
+        @Override
+        public String name() { return "test-plugin"; }
+
+        @Override
+        public String description() { return "A test plugin"; }
+
+        @Override
+        public String version() { return "1.0.0"; }
+
+        @Override
+        public void onLoad(PluginContext context) { loaded = true; }
+
+        @Override
+        public void onEnable() { enabled = true; }
+
+        @Override
+        public void onDisable() { enabled = false; }
+
+        @Override
+        public void onUnload() { unloaded = true; }
+
+        public boolean isEnabled() { return enabled; }
+        public boolean isLoaded() { return loaded; }
+        public boolean isUnloaded() { return unloaded; }
+    }
+
+    static class RegisteringPlugin implements YuPlugin {
+        @Override
+        public String name() { return "demo"; }
+
+        @Override
+        public String description() { return "demo"; }
+
+        @Override
+        public String version() { return "1.0.0"; }
+
+        @Override
+        public void onLoad(PluginContext context) {
+            var schema = JsonNodeFactory.instance.objectNode();
+            schema.put("type", "object");
+            schema.putObject("properties");
+            context.registerTool("ping", "ping", schema, args -> "pong");
+        }
+
+        @Override
+        public void onEnable() {}
+
+        @Override
+        public void onDisable() {}
+
+        @Override
+        public void onUnload() {}
+    }
+
+    static class SearchProviderPlugin implements YuPlugin {
+        final SearchProvider provider = new FakeSearchProvider("plugin-search");
+
+        @Override
+        public String name() { return "search-demo"; }
+
+        @Override
+        public String description() { return "search demo"; }
+
+        @Override
+        public String version() { return "1.0.0"; }
+
+        @Override
+        public void onLoad(PluginContext context) {
+            context.registerSearchProvider(provider);
+        }
+
+        @Override
+        public void onEnable() {}
+
+        @Override
+        public void onDisable() {}
+
+        @Override
+        public void onUnload() {}
+    }
+
+    record FakeSearchProvider(String name) implements SearchProvider {
+        @Override
+        public boolean isReady() { return true; }
+
+        @Override
+        public String unavailableHint() { return ""; }
+
+        @Override
+        public List<SearchResult> search(String query, int topK) {
+            return List.of();
+        }
+    }
+}

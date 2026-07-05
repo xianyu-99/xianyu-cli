@@ -227,6 +227,19 @@ class McpClientTest {
     }
 
     @Test
+    void formatResourceContentsTruncatesHugeTextResources() {
+        String huge = "x".repeat(250_001);
+        List<McpResourceContent> contents = List.of(
+                new McpResourceContent("file://huge.log", "text/plain", huge, null)
+        );
+
+        String formatted = McpClient.formatResourceContents(contents);
+
+        assertTrue(formatted.length() < huge.length());
+        assertTrue(formatted.contains("truncated"));
+    }
+
+    @Test
     void listPromptsFormatsPromptSummaries() throws Exception {
         InMemoryTransport transport = new InMemoryTransport()
                 .handle("initialize", p -> readJson("""

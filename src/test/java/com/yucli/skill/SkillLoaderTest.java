@@ -6,6 +6,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.net.URLClassLoader;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -88,5 +91,30 @@ class SkillLoaderTest {
     void testLoadFromDirectory_nonExistent() {
         List<Skill> skills = SkillLoader.loadFromDirectory(tempDir.resolve("nonexistent"));
         assertTrue(skills.isEmpty());
+    }
+
+    @Test
+    void loadBuiltinSkillsFromJarClasspath() throws Exception {
+        Path jar = tempDir.resolve("skills.jar");
+        try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar))) {
+            out.putNextEntry(new JarEntry("skills/jar-skill/SKILL.md"));
+            out.write("""
+                    ---
+                    name: jar-skill
+                    description: Builtin skill loaded from jar
+                    triggers: [jar]
+                    ---
+                    Jar skill body
+                    """.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        try (URLClassLoader loader = new URLClassLoader(new java.net.URL[]{jar.toUri().toURL()}, null)) {
+            List<Skill> skills = SkillLoader.loadBuiltinSkills(loader);
+
+            assertEquals(1, skills.size());
+            assertEquals("jar-skill", skills.get(0).name());
+            assertTrue(skills.get(0).body().contains("Jar skill body"));
+        }
     }
 }

@@ -2,6 +2,8 @@ package com.yucli.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yucli.agent.config.AgentProfile;
+import com.yucli.agent.config.AgentProfileLoader;
 import com.yucli.llm.LlmClient;
 import com.yucli.memory.MemoryManager;
 import com.yucli.runtime.CancellationContext;
@@ -11,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -47,6 +50,7 @@ public class AgentOrchestrator {
     private final SubAgent planner;
     private final List<SubAgent> workers;
     private final SubAgent reviewer;
+    private final AgentProfile reviewerProfile;
     private final MemoryManager memoryManager;
     private final ToolRegistry toolRegistry;
 
@@ -75,6 +79,10 @@ public class AgentOrchestrator {
         PENDING, RUNNING, COMPLETED, FAILED
     }
 
+    private record TeamAgents(SubAgent planner, List<SubAgent> workers,
+                              SubAgent reviewer, AgentProfile reviewerProfile) {
+    }
+
     public AgentOrchestrator(LlmClient llmClient) {
         this(llmClient, new ToolRegistry(), new MemoryManager(llmClient));
     }
@@ -84,21 +92,114 @@ public class AgentOrchestrator {
     }
 
     public AgentOrchestrator(LlmClient llmClient, ToolRegistry toolRegistry, MemoryManager memoryManager) {
-        this.llmClient = llmClient;
-        this.toolRegistry = toolRegistry;
-        this.planner = new SubAgent("planner", AgentRole.PLANNER, llmClient, toolRegistry);
-        this.workers = List.of(
-                new SubAgent("worker-1", AgentRole.WORKER, llmClient, toolRegistry),
-                new SubAgent("worker-2", AgentRole.WORKER, llmClient, toolRegistry)
-        );
-        this.reviewer = new SubAgent("reviewer", AgentRole.REVIEWER, llmClient, toolRegistry);
-        this.memoryManager = memoryManager;
+        this(llmClient, toolRegistry, memoryManager, List.of());
+    }
+
+    public AgentOrchestrator(LlmClient llmClient, ToolRegistry toolRegistry, MemoryManager memoryManager,
+                             Map<String, AgentProfile> profiles) {
+        this(llmClient, toolRegistry, memoryManager, profiles == null ? List.of() : profiles.values());
+    }
+
+    public AgentOrchestrator(LlmClient llmClient, ToolRegistry toolRegistry, MemoryManager memoryManager,
+                             Collection<AgentProfile> profiles) {
+        this.llmClient = Objects.requireNonNull(llmClient, "llmClient");
+        this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry");
+        this.memoryManager = Objects.requireNonNull(memoryManager, "memoryManager");
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
+        this.memoryManager.setHookManager(this.toolRegistry.getHookManager());
+
+        TeamAgents team = createTeam(this.llmClient, this.toolRegistry, profiles);
+        this.planner = team.planner();
+        this.workers = team.workers();
+        this.reviewer = team.reviewer();
+        this.reviewerProfile = team.reviewerProfile();
+    }
+
+    public static AgentOrchestrator fromProfiles(LlmClient llmClient, ToolRegistry toolRegistry,
+                                                 MemoryManager memoryManager,
+                                                 Map<String, AgentProfile> profiles) {
+        return new AgentOrchestrator(llmClient, toolRegistry, memoryManager, profiles);
+    }
+
+    public static AgentOrchestrator fromProfileLoader(LlmClient llmClient, ToolRegistry toolRegistry,
+                                                      MemoryManager memoryManager,
+                                                      AgentProfileLoader loader) throws IOException {
+        return new AgentOrchestrator(llmClient, toolRegistry, memoryManager,
+                Objects.requireNonNull(loader, "loader").load());
+    }
+
+    private static TeamAgents createTeam(LlmClient llmClient, ToolRegistry toolRegistry,
+                                         Collection<AgentProfile> profiles) {
+        List<AgentProfile> safeProfiles = profiles == null
+                ? List.of()
+                : profiles.stream().filter(Objects::nonNull).toList();
+
+        AgentProfile plannerProfile = selectProfile(safeProfiles, AgentRole.PLANNER, "planner");
+        SubAgent planner = plannerProfile == null
+                ? new SubAgent("planner", AgentRole.PLANNER, llmClient, toolRegistry)
+                : SubAgent.fromProfile(plannerProfile, llmClient, toolRegistry);
+
+        List<AgentProfile> workerProfiles = profilesByRole(safeProfiles, AgentRole.WORKER);
+        List<SubAgent> workers = workerProfiles.isEmpty()
+                ? List.of(
+                        new SubAgent("worker-1", AgentRole.WORKER, llmClient, toolRegistry),
+                        new SubAgent("worker-2", AgentRole.WORKER, llmClient, toolRegistry)
+                )
+                : workerProfiles.stream()
+                        .map(profile -> SubAgent.fromProfile(profile, llmClient, toolRegistry))
+                        .toList();
+
+        AgentProfile reviewerProfile = selectProfile(safeProfiles, AgentRole.REVIEWER, "reviewer");
+        SubAgent reviewer = reviewerProfile == null
+                ? new SubAgent("reviewer", AgentRole.REVIEWER, llmClient, toolRegistry)
+                : SubAgent.fromProfile(reviewerProfile, llmClient, toolRegistry);
+
+        return new TeamAgents(planner, List.copyOf(workers), reviewer, reviewerProfile);
+    }
+
+    private static List<AgentProfile> profilesByRole(List<AgentProfile> profiles, AgentRole role) {
+        return profiles.stream()
+                .filter(profile -> profile.getRole() == role)
+                .toList();
+    }
+
+    private static AgentProfile selectProfile(List<AgentProfile> profiles, AgentRole role, String preferredName) {
+        List<AgentProfile> matching = profilesByRole(profiles, role);
+        if (matching.isEmpty()) {
+            return null;
+        }
+        return matching.stream()
+                .filter(profile -> preferredName.equals(profile.getName()))
+                .findFirst()
+                .orElse(matching.get(0));
     }
 
     /**
      * 运行多 Agent 协作任务
      */
     public String run(String userInput) {
+        long lifecycleStartNanos = System.nanoTime();
+        String result = "";
+        String error = "";
+        toolRegistry.getHookManager().runAgentStart("team", userInput, "agent");
+        try {
+            result = runInternal(userInput);
+            return result;
+        } catch (RuntimeException e) {
+            error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        } finally {
+            toolRegistry.getHookManager().runAgentFinish(
+                    "team",
+                    userInput,
+                    result,
+                    elapsedMillis(lifecycleStartNanos),
+                    error,
+                    CancellationContext.isCancelled());
+        }
+    }
+
+    private String runInternal(String userInput) {
         log.info("Multi-Agent run started: inputLength={}", userInput == null ? 0 : userInput.length());
         memoryManager.addUserMessage(userInput);
         if (CancellationContext.isCancelled()) {
@@ -177,6 +278,10 @@ public class AgentOrchestrator {
         memoryManager.addAssistantMessage("[多Agent结果] " + finalResult);
 
         return finalResult;
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     /**
@@ -364,6 +469,15 @@ public class AgentOrchestrator {
         }
     }
 
+    private boolean cancelStepIfRequested(ExecutionStep step, List<ExecutionStep> steps, PrintStream out) {
+        if (!CancellationContext.isCancelled()) {
+            return false;
+        }
+        updateStep(steps, step.id(), step.withFailed("用户取消"));
+        out.println("⏹️ 步骤 [" + step.id() + "] 已取消\n");
+        return true;
+    }
+
     /**
      * 并行执行一批相互独立的步骤。
      *
@@ -390,8 +504,7 @@ public class AgentOrchestrator {
 
             futures.add(executor.submit(() -> {
                 SubAgent worker = null;
-                SubAgent localReviewer = new SubAgent(
-                        "reviewer-" + step.id(), AgentRole.REVIEWER, llmClient, toolRegistry);
+                SubAgent localReviewer = createLocalReviewer(step.id());
                 try {
                     worker = workerPool.take();
                     runStep(step, steps, retryCount, worker, localReviewer, context, stepOut);
@@ -436,6 +549,14 @@ public class AgentOrchestrator {
         }
     }
 
+    private SubAgent createLocalReviewer(String stepId) {
+        if (reviewerProfile == null) {
+            return new SubAgent("reviewer-" + stepId, AgentRole.REVIEWER, llmClient, toolRegistry);
+        }
+        return new SubAgent(reviewerProfile.getName() + "-" + stepId, AgentRole.REVIEWER,
+                llmClient, toolRegistry, reviewerProfile.getInstructions(), reviewerProfile.getTools());
+    }
+
     /**
      * 执行单个步骤（Worker 执行 + Reviewer 审查 + 最多 2 次重试）。
      *
@@ -454,9 +575,7 @@ public class AgentOrchestrator {
 
         AgentMessage taskMsg = AgentMessage.task("orchestrator", step.description());
         AgentMessage result = worker.executeWithContext(taskMsg, context, out);
-        if (CancellationContext.isCancelled()) {
-            updateStep(steps, step.id(), step.withFailed("用户取消"));
-            out.println("⏹️ 步骤 [" + step.id() + "] 已取消\n");
+        if (cancelStepIfRequested(step, steps, out)) {
             return;
         }
 
@@ -474,16 +593,20 @@ public class AgentOrchestrator {
         out.println("🔍 " + reviewer.getName() + " 正在审查步骤 [" + step.id() + "] 的结果...");
         AgentMessage reviewResult = reviewer.review(step.description(), result.content(), out);
         reviewer.clearHistory();
+        if (cancelStepIfRequested(step, steps, out)) {
+            return;
+        }
 
         if (reviewResult.type() == AgentMessage.Type.ERROR) {
             log.warn("Reviewer failed for step {}: {}", step.id(), reviewResult.content());
-            out.println("⚠️ 步骤 [" + step.id() + "] 审查阶段 LLM 调用失败，保留当前执行结果\n");
-            updateStep(steps, step.id(), step.withResult(result.content()));
+            out.println("❌ 步骤 [" + step.id() + "] 审查阶段 LLM 调用失败，已标记为失败\n");
+            updateStep(steps, step.id(), step.withFailed("reviewer failed: " + reviewResult.content()));
             return;
         }
 
         boolean approved = parseReviewApproval(reviewResult.content());
         String acceptedResult = result.content();
+        boolean reviewerFailed = false;
 
         if (approved) {
             updateStep(steps, step.id(), step.withResult(acceptedResult));
@@ -503,6 +626,9 @@ public class AgentOrchestrator {
 
             String feedbackContext = context + "\n\n之前的执行结果被审查拒绝，原因：\n" + issues;
             AgentMessage retryResult = worker.executeWithContext(taskMsg, feedbackContext, out);
+            if (cancelStepIfRequested(step, steps, out)) {
+                return;
+            }
             if (retryResult.type() == AgentMessage.Type.ERROR) {
                 log.warn("Step {} retry {} failed at LLM layer: {}", step.id(), retries, retryResult.content());
                 issues = "重试时 LLM 调用失败：" + retryResult.content();
@@ -520,11 +646,14 @@ public class AgentOrchestrator {
             acceptedResult = retryResult.content();
             AgentMessage retryReview = reviewer.review(step.description(), acceptedResult, out);
             reviewer.clearHistory();
+            if (cancelStepIfRequested(step, steps, out)) {
+                return;
+            }
 
             if (retryReview.type() == AgentMessage.Type.ERROR) {
                 log.warn("Reviewer failed for step {} retry {}: {}", step.id(), retries, retryReview.content());
-                approved = true;
-                issues = "";
+                reviewerFailed = true;
+                issues = "reviewer failed: " + retryReview.content();
                 break;
             }
 
@@ -532,9 +661,15 @@ public class AgentOrchestrator {
             issues = parseReviewIssues(retryReview.content());
         }
 
-        updateStep(steps, step.id(), step.withResult(acceptedResult));
+        if (reviewerFailed) {
+            updateStep(steps, step.id(), step.withFailed(issues));
+        } else {
+            updateStep(steps, step.id(), step.withResult(acceptedResult));
+        }
         if (approved) {
             out.println("✅ 步骤 [" + step.id() + "] 重试后审查通过\n");
+        } else if (reviewerFailed) {
+            out.println("❌ 步骤 [" + step.id() + "] 审查阶段 LLM 调用失败，已标记为失败\n");
         } else {
             out.println("⚠️ 步骤 [" + step.id() + "] 超过最大重试次数，保留当前结果\n");
         }

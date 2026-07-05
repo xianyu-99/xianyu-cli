@@ -4,16 +4,27 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yucli.checkpoint.CheckpointEntry;
+import com.yucli.checkpoint.CheckpointManager;
+import com.yucli.hook.HookManager;
+import com.yucli.hook.HookDecision;
 import com.yucli.mcp.protocol.McpToolDescriptor;
 import com.yucli.rag.CodeRetriever;
 import com.yucli.rag.SearchResultFormatter;
 import com.yucli.rag.VectorStore;
 import com.yucli.browser.BrowserToolProvider;
+import com.yucli.sandbox.CommandProcessSpec;
+import com.yucli.sandbox.CommandSandboxDriver;
 import com.yucli.policy.AuditLog;
 import com.yucli.policy.CommandGuard;
 import com.yucli.policy.PathGuard;
+import com.yucli.policy.PermissionProfile;
+import com.yucli.policy.PermissionProfileDecision;
 import com.yucli.policy.PolicyException;
 import com.yucli.runtime.CancellationContext;
+import com.yucli.routing.IntentDecision;
+import com.yucli.routing.IntentRouter;
+import com.yucli.routing.LocalIntentRouter;
 import com.yucli.web.FetchResult;
 import com.yucli.web.HtmlExtractor;
 import com.yucli.web.NetworkPolicy;
@@ -23,6 +34,7 @@ import com.yucli.web.SearchResult;
 import com.yucli.web.WebFetcher;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.BufferedReader;
 import java.nio.charset.StandardCharsets;
@@ -41,16 +53,24 @@ public class ToolRegistry {
     private static final int DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS = 90;
     private static final int MAX_PARALLEL_TOOLS = 4;
     private static final int MAX_COMMAND_OUTPUT_CHARS = 8_000;
+    private static final int DEFAULT_READ_FILE_MAX_CHARS = 24_000;
+    private static final int MAX_READ_FILE_MAX_CHARS = 80_000;
+    private static final int MAX_LIST_DIR_ENTRIES = 200;
+    private static final int MAX_TOOL_RESULT_CHARS = 24_000;
+    private static final int DEFAULT_SEARCH_TOP_K = 5;
+    private static final int MAX_SEARCH_TOP_K = 20;
     // write_file 单次写入字节数上限。LLM 想塞超大内容时通常是误生成（重复粘贴 / hallucinate 大段日志），
     // 5MB 对常规代码生成 / 文档撰写完全够用，超过即拒，避免磁盘灌满与误覆盖。
     private static final int MAX_WRITE_FILE_BYTES = 5 * 1024 * 1024;
     // 需要审计的内置工具（与 ApprovalPolicy 的 DANGEROUS_TOOLS 保持一致）；MCP 工具按前缀动态纳入审计。
-    // browser_navigate / browser_click / browser_type 有副作用，纳入审计。
+    // 浏览器导航、交互、脚本执行和会话管理都有副作用，纳入审计。
     private static final Set<String> AUDIT_TOOLS = Set.of(
             "write_file", "execute_command", "create_project",
-            "browser_navigate", "browser_click", "browser_type");
+            "browser_navigate", "browser_click", "browser_type",
+            "browser_evaluate", "browser_tab", "browser_close");
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
     private final Map<String, McpRegisteredTool> mcpTools = new ConcurrentHashMap<>();
+    private final Map<String, PluginRegisteredTool> pluginTools = new ConcurrentHashMap<>();
     private final long commandTimeoutSeconds;
     private final long toolBatchTimeoutSeconds;
     private static final int DEFAULT_FETCH_MAX_CHARS = 8_000;
@@ -62,18 +82,35 @@ public class ToolRegistry {
     private HtmlExtractor htmlExtractor;
     private NetworkPolicy networkPolicy;
     private BrowserToolProvider browserToolProvider;
+    private HookManager hookManager;
+    private PermissionProfile permissionProfile = PermissionProfile.defaultProfile();
+    private CheckpointManager checkpointManager;
+    private Path checkpointRootOverride;
+    private CommandSandboxDriver commandSandboxDriver = CommandSandboxDriver.fromEnvironment();
+    private IntentRouter intentRouter = LocalIntentRouter.fromEnvironment().orElse(null);
 
     public ToolRegistry() {
-        this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS);
+        this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, HookManager.disabled());
+    }
+
+    public ToolRegistry(HookManager hookManager) {
+        this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, hookManager);
     }
 
     ToolRegistry(long commandTimeoutSeconds) {
-        this(commandTimeoutSeconds, Math.max(commandTimeoutSeconds + 5, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS));
+        this(commandTimeoutSeconds, Math.max(commandTimeoutSeconds + 5, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS),
+                HookManager.disabled());
     }
 
     ToolRegistry(long commandTimeoutSeconds, long toolBatchTimeoutSeconds) {
+        this(commandTimeoutSeconds, toolBatchTimeoutSeconds, HookManager.disabled());
+    }
+
+    ToolRegistry(long commandTimeoutSeconds, long toolBatchTimeoutSeconds, HookManager hookManager) {
         this.commandTimeoutSeconds = commandTimeoutSeconds;
         this.toolBatchTimeoutSeconds = toolBatchTimeoutSeconds;
+        this.hookManager = hookManager == null ? HookManager.disabled() : hookManager;
+        this.hookManager.setProjectPath(Path.of(projectPath));
         // 注册内置工具
         registerFileTools();
         registerShellTools();
@@ -89,6 +126,10 @@ public class ToolRegistry {
     public void setProjectPath(String projectPath) {
         this.projectPath = projectPath;
         this.pathGuard = new PathGuard(projectPath);
+        this.hookManager.setProjectPath(Path.of(projectPath));
+        if (checkpointManager != null) {
+            this.checkpointManager = createCheckpointManager();
+        }
     }
 
     /**
@@ -96,6 +137,75 @@ public class ToolRegistry {
      */
     public String getProjectPath() {
         return projectPath;
+    }
+
+    public HookManager getHookManager() {
+        return hookManager;
+    }
+
+    public void setPermissionProfile(PermissionProfile permissionProfile) {
+        this.permissionProfile = permissionProfile == null ? PermissionProfile.defaultProfile() : permissionProfile;
+    }
+
+    public PermissionProfile getPermissionProfile() {
+        return permissionProfile;
+    }
+
+    public void setCommandSandboxDriver(CommandSandboxDriver commandSandboxDriver) {
+        this.commandSandboxDriver = commandSandboxDriver == null
+                ? CommandSandboxDriver.fromConfig(com.yucli.sandbox.SandboxConfig.disabled())
+                : commandSandboxDriver;
+    }
+
+    public void setIntentRouter(IntentRouter intentRouter) {
+        this.intentRouter = intentRouter;
+    }
+
+    public String commandSandboxStatus() {
+        return commandSandboxDriver == null ? "disabled" : commandSandboxDriver.statusText();
+    }
+
+    public void enableCheckpointing() {
+        enableCheckpointing(null);
+    }
+
+    public void enableCheckpointing(Path checkpointsRoot) {
+        this.checkpointRootOverride = checkpointsRoot;
+        this.checkpointManager = createCheckpointManager();
+    }
+
+    public CheckpointManager getCheckpointManager() {
+        return checkpointManager;
+    }
+
+    public String checkpointStatus() {
+        if (checkpointManager == null) {
+            return "Checkpoints: disabled";
+        }
+        return checkpointManager.statusText();
+    }
+
+    public String restoreLastCheckpoint() {
+        if (checkpointManager == null) {
+            return "Checkpoints are disabled";
+        }
+        try {
+            Optional<CheckpointEntry> restored = checkpointManager.restoreLast();
+            if (restored.isEmpty()) {
+                return "No checkpoints to restore";
+            }
+            CheckpointEntry entry = restored.get();
+            return "Restored checkpoint " + entry.getId() + " for " + entry.getTargetPath();
+        } catch (Exception e) {
+            return "Restore checkpoint failed: " + e.getMessage();
+        }
+    }
+
+    private CheckpointManager createCheckpointManager() {
+        Path root = pathGuard.getRootPath();
+        return checkpointRootOverride == null
+                ? new CheckpointManager(root)
+                : new CheckpointManager(root, checkpointRootOverride);
     }
 
     /**
@@ -106,15 +216,13 @@ public class ToolRegistry {
         tools.put("read_file", new Tool(
                 "read_file",
                 "读取文件内容（仅限项目根目录之内）",
-                createParameters(new Param("path", "string", "文件路径", true)),
-                args -> {
-                    Path safe = pathGuard.resolveSafe(args.get("path"));
-                    try {
-                        return "文件内容:\n" + Files.readString(safe);
-                    } catch (Exception e) {
-                        return "读取文件失败: " + e.getMessage();
-                    }
-                }
+                createParameters(
+                        new Param("path", "string", "文件路径", true),
+                        new Param("start_line", "integer", "起始行号（从 1 开始，可选）", false),
+                        new Param("end_line", "integer", "结束行号（包含，可选）", false),
+                        new Param("max_chars", "integer", "返回最大字符数，默认 24000，最大 80000", false)
+                ),
+                this::readFile
         ));
 
         // write_file 工具
@@ -135,12 +243,16 @@ public class ToolRegistry {
                     }
                     Path safe = pathGuard.resolveSafe(path);
                     try {
+                        Optional<CheckpointEntry> checkpoint = checkpointBeforeMutation(path);
                         Path parent = safe.getParent();
                         if (parent != null) {
                             Files.createDirectories(parent);
                         }
                         Files.writeString(safe, content);
-                        return "文件已写入: " + path;
+                        String suffix = checkpoint
+                                .map(entry -> " (checkpoint: " + entry.getId() + ")")
+                                .orElse("");
+                        return "文件已写入: " + path + suffix;
                     } catch (Exception e) {
                         return "写入文件失败: " + e.getMessage();
                     }
@@ -151,31 +263,138 @@ public class ToolRegistry {
         tools.put("list_dir", new Tool(
                 "list_dir",
                 "列出目录内容（仅限项目根目录之内）",
-                createParameters(new Param("path", "string", "目录路径", true)),
-                args -> {
-                    Path safe = pathGuard.resolveSafe(args.get("path"));
-                    try {
-                        File[] files = safe.toFile().listFiles();
-                        if (files == null) {
-                            return "目录为空或不存在";
-                        }
-                        StringBuilder sb = new StringBuilder("目录内容:\n");
-                        for (File f : files) {
-                            sb.append(f.isDirectory() ? "[D] " : "[F] ")
-                              .append(f.getName())
-                              .append("\n");
-                        }
-                        return sb.toString();
-                    } catch (Exception e) {
-                        return "列出目录失败: " + e.getMessage();
-                    }
-                }
+                createParameters(
+                        new Param("path", "string", "目录路径", true),
+                        new Param("max_entries", "integer", "返回最大条目数，默认 200", false)
+                ),
+                this::listDirectory
         ));
     }
 
     /**
      * 注册Shell命令工具
      */
+    private String readFile(Map<String, String> args) {
+        String path = args.get("path");
+        Path safe = pathGuard.resolveSafe(path);
+        int startLine = Math.max(1, parseInt(args.get("start_line"), 1));
+        int endLine = parseInt(args.get("end_line"), -1);
+        int maxChars = clamp(parseInt(args.get("max_chars"), DEFAULT_READ_FILE_MAX_CHARS),
+                1, MAX_READ_FILE_MAX_CHARS);
+        if (endLine > 0 && endLine < startLine) {
+            return "读取文件失败: end_line 不能小于 start_line";
+        }
+
+        try {
+            if (!Files.isRegularFile(safe)) {
+                return "读取文件失败: 目标不是普通文件";
+            }
+            if (isLikelyBinary(safe)) {
+                return "读取文件失败: 文件可能是二进制内容，请改用专门工具处理";
+            }
+
+            StringBuilder body = new StringBuilder();
+            int returnedLines = 0;
+            int lastLineSeen = 0;
+            boolean truncated = false;
+
+            try (BufferedReader reader = Files.newBufferedReader(safe, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    lastLineSeen++;
+                    if (lastLineSeen < startLine) {
+                        continue;
+                    }
+                    if (endLine > 0 && lastLineSeen > endLine) {
+                        break;
+                    }
+
+                    String rendered = String.format(Locale.ROOT, "%6d | %s%n", lastLineSeen, line);
+                    if (body.length() + rendered.length() > maxChars) {
+                        truncated = true;
+                        break;
+                    }
+                    body.append(rendered);
+                    returnedLines++;
+                }
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("文件内容: ").append(path)
+                    .append(" (从第 ").append(startLine).append(" 行开始");
+            if (endLine > 0) {
+                result.append("，到第 ").append(endLine).append(" 行");
+            }
+            result.append("，返回 ").append(returnedLines).append(" 行，max_chars=")
+                    .append(maxChars).append(")\n");
+            if (body.isEmpty()) {
+                result.append("(没有匹配的行)\n");
+            } else {
+                result.append(body);
+            }
+            if (truncated) {
+                result.append("\n...(内容已截断，请用 start_line/end_line/max_chars 继续读取)...");
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return "读取文件失败: " + e.getMessage();
+        }
+    }
+
+    private String listDirectory(Map<String, String> args) {
+        String path = args.get("path");
+        Path safe = pathGuard.resolveSafe(path);
+        int maxEntries = clamp(parseInt(args.get("max_entries"), MAX_LIST_DIR_ENTRIES),
+                1, MAX_LIST_DIR_ENTRIES);
+        try {
+            File[] files = safe.toFile().listFiles();
+            if (files == null) {
+                return "目录为空或不存在";
+            }
+            Arrays.sort(files, Comparator
+                    .comparing((File f) -> !f.isDirectory())
+                    .thenComparing(File::getName, String.CASE_INSENSITIVE_ORDER));
+
+            StringBuilder sb = new StringBuilder("目录内容: ")
+                    .append(path)
+                    .append(" (显示 ")
+                    .append(Math.min(files.length, maxEntries))
+                    .append("/")
+                    .append(files.length)
+                    .append(")\n");
+            for (int i = 0; i < Math.min(files.length, maxEntries); i++) {
+                File f = files[i];
+                sb.append(f.isDirectory() ? "[D] " : "[F] ")
+                        .append(f.getName())
+                        .append("\n");
+            }
+            if (files.length > maxEntries) {
+                sb.append("...(已省略 ").append(files.length - maxEntries)
+                        .append(" 个条目，请指定更精确路径继续)...");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "列出目录失败: " + e.getMessage();
+        }
+    }
+
+    private static boolean isLikelyBinary(Path path) throws IOException {
+        byte[] bytes;
+        try (var in = Files.newInputStream(path)) {
+            bytes = in.readNBytes(4096);
+        }
+        for (byte b : bytes) {
+            if (b == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private void registerShellTools() {
         tools.put("execute_command", new Tool(
                 "execute_command",
@@ -199,11 +418,22 @@ public class ToolRegistry {
                 args -> {
                     String name = args.get("name");
                     String type = args.get("type");
+                    if (type == null || type.isBlank()) {
+                        return "不支持的项目类型: " + type + "，仅支持 java/python/node";
+                    }
+                    String normalizedType = type.toLowerCase(Locale.ROOT);
+                    if (!Set.of("java", "python", "node").contains(normalizedType)) {
+                        return "不支持的项目类型: " + type + "，仅支持 java/python/node";
+                    }
                     Path projectRoot = pathGuard.resolveSafe(name);
                     try {
+                        if (Files.exists(projectRoot)) {
+                            return "创建项目失败: 目标已存在，无法创建可回滚 checkpoint";
+                        }
+                        Optional<CheckpointEntry> checkpoint = checkpointBeforeMutation(name);
                         Files.createDirectories(projectRoot);
 
-                        switch (type.toLowerCase()) {
+                        switch (normalizedType) {
                             case "java" -> {
                                 Files.createDirectories(projectRoot.resolve("src/main/java"));
                                 Files.createDirectories(projectRoot.resolve("src/main/resources"));
@@ -226,7 +456,10 @@ public class ToolRegistry {
                                         String.format("{\"name\": \"%s\", \"version\": \"1.0.0\"}", name));
                             }
                         }
-                        return "项目已创建: " + name + " (类型: " + type + ")";
+                        String suffix = checkpoint
+                                .map(entry -> " (checkpoint: " + entry.getId() + ")")
+                                .orElse("");
+                        return "项目已创建: " + name + " (类型: " + normalizedType + ")" + suffix;
                     } catch (Exception e) {
                         return "创建项目失败: " + e.getMessage();
                     }
@@ -247,13 +480,7 @@ public class ToolRegistry {
                 ),
                 args -> {
                     String query = args.get("query");
-                    int topK = 5;
-                    try {
-                        if (args.containsKey("top_k")) {
-                            topK = Integer.parseInt(args.get("top_k"));
-                        }
-                    } catch (NumberFormatException ignored) {
-                    }
+                    int topK = normalizeSearchTopK(args.get("top_k"));
 
                     try (CodeRetriever retriever = new CodeRetriever(projectPath)) {
                         var stats = retriever.getStats();
@@ -313,7 +540,9 @@ public class ToolRegistry {
                         "静态页面优先使用 web_fetch，需要点击/输入/截图时使用浏览器工具。",
                 createParameters(
                         new Param("url", "string", "目标 URL，例如 https://example.com", true),
-                        new Param("wait_for_load", "boolean", "是否等待页面加载完成（默认 true）", false)
+                        new Param("wait_for_load", "boolean", "是否等待页面加载完成（默认 true）", false),
+                        new Param("include_dom_summary", "boolean", "成功后是否附带清洗后的 DOM 摘要（默认 true，大页面可设为 false）", false),
+                        new Param("dom_summary_max_length", "integer", "DOM 摘要最大字符数（默认 8000，最大 20000）", false)
                 ),
                 args -> browserToolProvider.navigate(args)
         ));
@@ -332,7 +561,9 @@ public class ToolRegistry {
                 "browser_click",
                 "点击页面上匹配 CSS 选择器的元素。",
                 createParameters(
-                        new Param("selector", "string", "CSS 选择器，例如 #submit-button、.nav-item", true)
+                        new Param("selector", "string", "CSS 选择器，例如 #submit-button、.nav-item", true),
+                        new Param("include_dom_summary", "boolean", "成功后是否附带清洗后的 DOM 摘要（默认 true，大页面可设为 false）", false),
+                        new Param("dom_summary_max_length", "integer", "DOM 摘要最大字符数（默认 8000，最大 20000）", false)
                 ),
                 args -> browserToolProvider.click(args)
         ));
@@ -343,7 +574,9 @@ public class ToolRegistry {
                 createParameters(
                         new Param("selector", "string", "输入框的 CSS 选择器", true),
                         new Param("text", "string", "要输入的文本", true),
-                        new Param("submit", "boolean", "输入后是否按回车提交（默认 false）", false)
+                        new Param("submit", "boolean", "输入后是否按回车提交（默认 false）", false),
+                        new Param("include_dom_summary", "boolean", "成功后是否附带清洗后的 DOM 摘要（默认 true，大页面可设为 false）", false),
+                        new Param("dom_summary_max_length", "integer", "DOM 摘要最大字符数（默认 8000，最大 20000）", false)
                 ),
                 args -> browserToolProvider.type(args)
         ));
@@ -393,6 +626,14 @@ public class ToolRegistry {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    static int normalizeSearchTopK(String value) {
+        int parsed = parseInt(value, DEFAULT_SEARCH_TOP_K);
+        if (parsed <= 0) {
+            return DEFAULT_SEARCH_TOP_K;
+        }
+        return Math.min(parsed, MAX_SEARCH_TOP_K);
     }
 
     private synchronized SearchProvider searchProvider() {
@@ -481,7 +722,7 @@ public class ToolRegistry {
         }
 
         try {
-            WebFetcher.RawResponse raw = webFetcher().fetch(url.trim());
+            WebFetcher.RawResponse raw = webFetcher().fetch(url.trim(), policy);
             HtmlExtractor.Extracted extracted = htmlExtractor().extract(raw.body(), raw.url());
             String markdown = extracted.markdown();
 
@@ -559,6 +800,126 @@ public class ToolRegistry {
     }
 
     /**
+     * Return a prompt-scoped tool set to keep tool schema small and cache prefixes stable.
+     * The no-arg method remains full fidelity for tests, explicit profiles, and integrations.
+     */
+    public List<com.yucli.llm.LlmClient.Tool> getToolDefinitions(String prompt) {
+        Set<String> selected = selectToolNames(prompt);
+        return tools.values().stream()
+                .filter(t -> selected.contains(t.name()) || shouldExposeDynamicTool(t.name(), prompt))
+                .map(t -> new com.yucli.llm.LlmClient.Tool(t.name(), t.description(), t.parameters()))
+                .toList();
+    }
+
+    private Set<String> selectToolNames(String prompt) {
+        Set<String> selected = new LinkedHashSet<>();
+        selected.add("read_file");
+        selected.add("list_dir");
+        selected.add("search_code");
+
+        IntentDecision decision = routeIntent(prompt);
+        if (decision != null) {
+            applyIntentDecision(selected, decision);
+        }
+
+        applyHeuristicToolExpansion(selected, prompt);
+        return selected;
+    }
+
+    private IntentDecision routeIntent(String prompt) {
+        if (intentRouter == null) {
+            return null;
+        }
+        try {
+            return intentRouter.route(prompt).orElse(null);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private void applyIntentDecision(Set<String> selected, IntentDecision decision) {
+        for (String toolName : decision.suggestedTools()) {
+            if (tools.containsKey(toolName)) {
+                selected.add(toolName);
+            }
+        }
+        if (decision.needsWrite()) {
+            selected.add("write_file");
+            selected.add("create_project");
+        }
+        if (decision.needsCommand()) {
+            selected.add("execute_command");
+        }
+        if (decision.needsWeb()) {
+            selected.add("web_search");
+            selected.add("web_fetch");
+        }
+        if (decision.needsBrowser()) {
+            selected.add("browser_navigate");
+            selected.add("browser_screenshot");
+            selected.add("browser_click");
+            selected.add("browser_type");
+            selected.add("browser_evaluate");
+            selected.add("browser_get_dom");
+            selected.add("browser_tab");
+            selected.add("browser_close");
+        }
+    }
+
+    private void applyHeuristicToolExpansion(Set<String> selected, String prompt) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        if (containsAny(text, "改", "修改", "修复", "实现", "新增", "创建", "生成", "补", "优化",
+                "write", "edit", "fix", "implement", "create", "generate", "update")) {
+            selected.add("write_file");
+            selected.add("create_project");
+            selected.add("execute_command");
+        }
+        if (containsAny(text, "运行", "执行", "测试", "构建", "编译", "命令", "提交", "推送",
+                "mvn", "npm", "pnpm", "git", "docker", "run", "test", "build", "compile", "command", "push")) {
+            selected.add("execute_command");
+        }
+        if (containsAny(text, "http://", "https://", "url", "网页", "网站", "联网", "搜索", "最新", "github",
+                "文档", "web", "search", "latest", "docs")) {
+            selected.add("web_search");
+            selected.add("web_fetch");
+        }
+        if (containsAny(text, "浏览器", "截图", "点击", "输入", "登录", "页面", "browser", "screenshot", "click", "login")) {
+            selected.add("browser_navigate");
+            selected.add("browser_screenshot");
+            selected.add("browser_click");
+            selected.add("browser_type");
+            selected.add("browser_evaluate");
+            selected.add("browser_get_dom");
+            selected.add("browser_tab");
+            selected.add("browser_close");
+        }
+    }
+
+    private boolean shouldExposeDynamicTool(String toolName, String prompt) {
+        if (toolName == null) {
+            return false;
+        }
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        String lowerTool = toolName.toLowerCase(Locale.ROOT);
+        if (toolName.startsWith("mcp__")) {
+            return text.contains("mcp") || text.contains("@") || text.contains(lowerTool);
+        }
+        if (toolName.startsWith("plugin__")) {
+            return text.contains("plugin") || text.contains("插件") || text.contains(lowerTool);
+        }
+        return false;
+    }
+
+    private static boolean containsAny(String text, String... needles) {
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && text.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 注册一个 MCP 工具到 ToolRegistry。
      *
      * @param descriptor 工具描述（含 namespacedName 如 mcp__filesystem__read_file）
@@ -587,6 +948,19 @@ public class ToolRegistry {
         tools.remove(toolName);
     }
 
+    public synchronized void unregisterPluginTools(String prefix) {
+        if (prefix == null || prefix.isBlank()) {
+            return;
+        }
+        List<String> toRemove = pluginTools.keySet().stream()
+                .filter(name -> name.startsWith(prefix))
+                .toList();
+        for (String toolName : toRemove) {
+            pluginTools.remove(toolName);
+            tools.remove(toolName);
+        }
+    }
+
     public synchronized void replaceMcpToolsForServer(String serverName, List<McpToolDescriptor> newTools,
                                                       Function<McpToolDescriptor, Function<String, String>> invokerFactory) {
         Objects.requireNonNull(serverName, "serverName");
@@ -603,6 +977,27 @@ public class ToolRegistry {
         for (McpToolDescriptor descriptor : newTools) {
             registerMcpTool(descriptor, invokerFactory.apply(descriptor));
         }
+    }
+
+    public void setSearchProvider(SearchProvider provider) {
+        this.searchProvider = provider;
+    }
+
+    public synchronized void registerPluginTool(String pluginName, String toolName, String description, JsonNode parameters,
+                                                com.yucli.plugin.ToolExecutor executor) {
+        Objects.requireNonNull(pluginName, "pluginName");
+        Objects.requireNonNull(toolName, "toolName");
+        Objects.requireNonNull(executor, "executor");
+        String pluginToolName = "plugin__" + pluginName + "__" + toolName;
+        String pluginDesc = description == null ? "插件提供的工具" : description + " (plugin: " + pluginName + ")";
+        PluginRegisteredTool registered = new PluginRegisteredTool(pluginToolName, description, executor);
+        pluginTools.put(pluginToolName, registered);
+        tools.put(pluginToolName, new Tool(
+                pluginToolName,
+                pluginDesc,
+                parameters,
+                args -> "插件工具不应通过 Map<String,String> 入口执行"
+        ));
     }
 
     /**
@@ -622,16 +1017,42 @@ public class ToolRegistry {
             return "未知工具: " + name;
         }
 
+        HookDecision hookDecision = hookManager.runPreToolUse(name, argumentsJson);
+        if (!hookDecision.allowed()) {
+            String reason = hookDecision.reason() == null || hookDecision.reason().isBlank()
+                    ? "hook 拒绝了此次工具调用"
+                    : hookDecision.reason();
+            return "[Hook] PreToolUse 拒绝: " + reason;
+        }
+        argumentsJson = hookDecision.argumentsJsonOr(argumentsJson);
+
         boolean shouldAudit = shouldAudit(name);
         long start = System.nanoTime();
+        PermissionProfileDecision permissionDecision = evaluatePermission(name, argumentsJson);
+        if (permissionDecision.isDeny()) {
+            return denyByPermission(name, argumentsJson, permissionDecision, shouldAudit, start);
+        }
+        String result;
 
         try {
             McpRegisteredTool mcpTool = mcpTools.get(name);
             if (mcpTool != null) {
-                String result = mcpTool.invoker().apply(argumentsJson);
+                result = limitToolResult(name, mcpTool.invoker().apply(argumentsJson));
                 if (shouldAudit) {
                     auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
                 }
+                hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
+                return result;
+            }
+
+            PluginRegisteredTool pluginTool = pluginTools.get(name);
+            if (pluginTool != null) {
+                JsonNode argsNode = mapper.readTree(argumentsJson);
+                result = limitToolResult(name, pluginTool.executor().execute(argsNode));
+                if (shouldAudit) {
+                    auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
+                }
+                hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
                 return result;
             }
 
@@ -639,23 +1060,28 @@ public class ToolRegistry {
             Map<String, String> argMap = new HashMap<>();
             args.fields().forEachRemaining(entry ->
                     argMap.put(entry.getKey(), entry.getValue().asText()));
-            String result = tool.executor().execute(argMap);
+            result = limitToolResult(name, tool.executor().execute(argMap));
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
             }
+            hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
             return result;
         } catch (PolicyException e) {
+            result = "🛡️ 策略拒绝: " + e.getMessage();
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.denyByPolicy(
                         name, argumentsJson, e.getMessage(), elapsedMillis(start)));
             }
-            return "🛡️ 策略拒绝: " + e.getMessage();
+            hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
+            return result;
         } catch (Exception e) {
+            result = "工具执行失败: " + e.getMessage();
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.error(
                         name, argumentsJson, e.getMessage(), elapsedMillis(start)));
             }
-            return "工具执行失败: " + e.getMessage();
+            hookManager.runPostToolUse(name, argumentsJson, result, elapsedMillis(start));
+            return result;
         }
     }
 
@@ -740,7 +1166,36 @@ public class ToolRegistry {
         }
     }
 
-    private long elapsedMillis(long startedAtNanos) {
+    protected PermissionProfileDecision evaluatePermission(String name, String argumentsJson) {
+        PermissionProfile profile = permissionProfile == null
+                ? PermissionProfile.defaultProfile()
+                : permissionProfile;
+        return profile.decision(name, argumentsJson);
+    }
+
+    protected String denyByPermission(String name,
+                                      String argumentsJson,
+                                      PermissionProfileDecision decision,
+                                      boolean shouldAudit,
+                                      long startedAtNanos) {
+        String reason = decision.reason() == null || decision.reason().isBlank()
+                ? "permission profile denied this tool call"
+                : decision.reason();
+        if (shouldAudit) {
+            auditLog.record(AuditLog.AuditEntry.denyByPolicy(
+                    name, argumentsJson, reason, elapsedMillis(startedAtNanos)));
+        }
+        return "[Permission] 调用被拒绝: " + reason;
+    }
+
+    protected Optional<CheckpointEntry> checkpointBeforeMutation(String path) throws IOException {
+        if (checkpointManager == null) {
+            return Optional.empty();
+        }
+        return Optional.of(checkpointManager.checkpointBeforeWrite(path));
+    }
+
+    protected long elapsedMillis(long startedAtNanos) {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
     }
 
@@ -748,8 +1203,21 @@ public class ToolRegistry {
         return tools.containsKey(name);
     }
 
-    private static boolean shouldAudit(String name) {
-        return AUDIT_TOOLS.contains(name) || (name != null && name.startsWith("mcp__"));
+    protected static boolean shouldAudit(String name) {
+        return AUDIT_TOOLS.contains(name) || (name != null && name.startsWith("mcp__"))
+                || (name != null && name.startsWith("plugin__"));
+    }
+
+    private static String limitToolResult(String toolName, String result) {
+        if (result == null || result.length() <= MAX_TOOL_RESULT_CHARS) {
+            return result;
+        }
+        int headChars = MAX_TOOL_RESULT_CHARS / 2;
+        int tailChars = MAX_TOOL_RESULT_CHARS - headChars;
+        return result.substring(0, headChars)
+                + "\n...(工具结果已截断: " + toolName + "，原始 " + result.length()
+                + " 字符，保留头尾；请缩小查询范围或分页读取)...\n"
+                + result.substring(result.length() - tailChars);
     }
 
     private static String mcpDescription(McpToolDescriptor descriptor) {
@@ -778,9 +1246,13 @@ public class ToolRegistry {
         });
 
         Process process = null;
+        CommandProcessSpec processSpec = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder("bash", "-c", normalized);
-            pb.directory(new File(projectPath));
+            processSpec = commandProcessSpec(normalized);
+            ProcessBuilder pb = new ProcessBuilder(processSpec.commandLine());
+            if (processSpec.workingDirectory() != null) {
+                pb.directory(processSpec.workingDirectory().toFile());
+            }
             pb.redirectErrorStream(true);
             process = pb.start();
 
@@ -792,6 +1264,7 @@ public class ToolRegistry {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
                 outputFuture.cancel(true);
+                cleanupSandboxProcess(processSpec);
                 return "命令执行超时（" + commandTimeoutSeconds + "秒），已强制终止";
             }
 
@@ -803,35 +1276,90 @@ public class ToolRegistry {
             if (process != null) {
                 process.destroyForcibly();
             }
+            cleanupSandboxProcess(processSpec);
             return "用户取消了此次工具调用";
         } catch (Exception e) {
             if (process != null) {
                 process.destroyForcibly();
             }
+            cleanupSandboxProcess(processSpec);
             return "执行命令失败: " + e.getMessage();
         } finally {
             outputReaderExecutor.shutdownNow();
         }
     }
 
+    private CommandProcessSpec commandProcessSpec(String normalizedCommand) {
+        if (commandSandboxDriver != null && commandSandboxDriver.enabled()) {
+            return commandSandboxDriver.createProcessSpec(normalizedCommand, pathGuard.getRootPath());
+        }
+        return new CommandProcessSpec(shellCommand(normalizedCommand), pathGuard.getRootPath(), List.of(), "local");
+    }
+
+    private void cleanupSandboxProcess(CommandProcessSpec processSpec) {
+        if (processSpec == null || processSpec.cleanupCommand().isEmpty()) {
+            return;
+        }
+        Process cleanup = null;
+        try {
+            cleanup = new ProcessBuilder(processSpec.cleanupCommand())
+                    .redirectErrorStream(true)
+                    .start();
+            cleanup.waitFor(5, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+        } finally {
+            if (cleanup != null && cleanup.isAlive()) {
+                cleanup.destroyForcibly();
+            }
+        }
+    }
+
+    static List<String> shellCommand(String normalizedCommand) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("win")) {
+            return List.of("cmd.exe", "/c", normalizedCommand);
+        }
+        return List.of("bash", "-c", normalizedCommand);
+    }
+
     private String readProcessOutput(Process process) throws Exception {
-        StringBuilder output = new StringBuilder();
+        int headLimit = MAX_COMMAND_OUTPUT_CHARS / 2;
+        int tailLimit = MAX_COMMAND_OUTPUT_CHARS - headLimit;
+        StringBuilder head = new StringBuilder();
+        Deque<String> tail = new ArrayDeque<>();
+        int tailChars = 0;
+        int totalChars = 0;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (output.length() < MAX_COMMAND_OUTPUT_CHARS) {
-                    int remaining = MAX_COMMAND_OUTPUT_CHARS - output.length();
-                    if (line.length() > remaining) {
-                        output.append(line, 0, remaining);
-                    } else {
-                        output.append(line);
-                    }
-                    output.append("\n");
+                String rendered = line + "\n";
+                totalChars += rendered.length();
+                if (head.length() < headLimit) {
+                    int remaining = headLimit - head.length();
+                    head.append(rendered, 0, Math.min(remaining, rendered.length()));
+                    continue;
+                }
+
+                tail.addLast(rendered);
+                tailChars += rendered.length();
+                while (tailChars > tailLimit && !tail.isEmpty()) {
+                    tailChars -= tail.removeFirst().length();
                 }
             }
         }
-        if (output.length() >= MAX_COMMAND_OUTPUT_CHARS) {
-            return output.substring(0, MAX_COMMAND_OUTPUT_CHARS) + "\n...(输出已截断)";
+        if (totalChars <= MAX_COMMAND_OUTPUT_CHARS) {
+            StringBuilder output = new StringBuilder(head);
+            for (String item : tail) {
+                output.append(item);
+            }
+            return output.toString();
+        }
+        StringBuilder output = new StringBuilder(head);
+        output.append("\n...(输出中间已截断，原始约 ")
+                .append(totalChars)
+                .append(" 字符，保留头尾)...\n");
+        for (String item : tail) {
+            output.append(item);
         }
         return output.toString();
     }
@@ -864,6 +1392,8 @@ public class ToolRegistry {
     public record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
 
     private record McpRegisteredTool(McpToolDescriptor descriptor, Function<String, String> invoker) {}
+
+    private record PluginRegisteredTool(String name, String description, com.yucli.plugin.ToolExecutor executor) {}
 
     public record ToolInvocation(String id, String name, String argumentsJson) {}
 

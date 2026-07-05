@@ -50,11 +50,17 @@ public class AnthropicClient implements LlmClient {
     private final String baseUrl;
     private final String apiKey;
     private final String model;
+    private final String reasoningEffort;
 
     public AnthropicClient(String baseUrl, String apiKey, String model) {
+        this(baseUrl, apiKey, model, null);
+    }
+
+    public AnthropicClient(String baseUrl, String apiKey, String model, String reasoningEffort) {
         this.baseUrl = baseUrl != null && !baseUrl.isBlank() ? baseUrl : "https://api.deepseek.com/anthropic";
         this.apiKey = apiKey;
         this.model = model != null && !model.isBlank() ? model : "deepseek-v4-pro";
+        this.reasoningEffort = reasoningEffort;
     }
 
     // ---- LlmClient impl ----
@@ -97,6 +103,9 @@ public class AnthropicClient implements LlmClient {
     public String getProviderName() { return "anthropic"; }
 
     @Override
+    public String getReasoningEffort() { return reasoningEffort; }
+
+    @Override
     public int maxContextWindow() {
         return 1_000_000;
     }
@@ -120,6 +129,9 @@ public class AnthropicClient implements LlmClient {
         root.put("model", model);
         root.put("max_tokens", DEFAULT_MAX_TOKENS);
         root.put("stream", true);
+        if (reasoningEffort != null && !reasoningEffort.isBlank()) {
+            root.put("reasoning_effort", reasoningEffort);
+        }
 
         // 分离 system prompt
         StringBuilder systemText = new StringBuilder();
