@@ -128,6 +128,10 @@ public class ToolRegistry {
         return projectPath;
     }
 
+    public HookManager getHookManager() {
+        return hookManager;
+    }
+
     public void setPermissionProfile(PermissionProfile permissionProfile) {
         this.permissionProfile = permissionProfile == null ? PermissionProfile.defaultProfile() : permissionProfile;
     }

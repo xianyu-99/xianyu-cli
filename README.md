@@ -122,7 +122,7 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 | `/loop` | 查看 ReAct 循环保险阀状态 |
 | `/eval [cases\|run]` | 查看 EvalHarness 用例格式或手动运行说明，不默认调用真实 LLM |
 | `/agents` | 查看用户级和项目级 SubAgent Profile 配置 |
-| `/hooks` | 查看 `PreToolUse` / `PostToolUse` Hooks 状态 |
+| `/hooks` | 查看工具、Prompt 与生命周期 Hooks 状态 |
 | `/plan [任务]` | Plan-and-Execute 模式 |
 | `/team [任务]` | Multi-Agent 协作模式 |
 | `/model <name>` | 切换模型（deepseek/glm/anthropic） |
@@ -302,17 +302,27 @@ yucli run "review recent changes" --mode team --jsonl
 
 ### Hooks
 
-YuCLI 支持可配置工具生命周期 hook。默认读取：
+YuCLI 支持可配置工具、Prompt 与生命周期 hook。默认读取：
 
 1. `~/.YuCLI/hooks.json`
 2. `.YuCLI/hooks.json`
 
 当前事件：
 
-- `PreToolUse`：工具执行前触发；hook 命令非 0、超时、执行失败或结构化 `deny` 会阻断本次工具调用
+- `PreToolUse`：工具执行前触发；hook 非 0、HTTP 非 2xx、超时、执行失败或结构化 `deny` 会阻断本次工具调用
 - `PostToolUse`：工具执行后触发；失败只打印警告，不改变工具结果
-- `PreToolUse` stdout 可返回 `{"decision":"allow|deny|modify","reason":"...","arguments":{...}}`；`modify` 会替换后续工具调用参数
-- `/hooks` 可查看当前 hook 状态、事件计数、matcher、命令数量和 timeout
+- `UserPromptSubmit`：用户输入提交给 Agent 前触发；支持 `deny` / `modify`，`modify.arguments.prompt` 会替换后续 Agent 输入
+- `AgentStart` / `AgentFinish`：ReAct、Plan、Team 顶层 run 生命周期；warning-only
+- `SubAgentStart` / `SubAgentFinish`：Planner / Worker / Reviewer 子代理生命周期；warning-only
+- `PreCompact`：短期记忆压缩前触发；warning-only，失败不阻断压缩
+
+hook 执行器：
+
+- `command` / `commands`：本地命令，通过 stdin 接收 JSON payload
+- `url` / `urls`：HTTP POST JSON payload，2xx 视为成功
+- `prompt` / `prompts`：使用当前 LLM 做结构化 hook 决策，不传工具列表，避免 hook 内部递归 tool-call
+
+阻断型事件（`PreToolUse`、`UserPromptSubmit`）可返回 `{"decision":"allow|deny|modify","reason":"...","arguments":{...}}`；非阻断事件会忽略 `deny/modify`，只向 stderr 打印 warning。`/hooks` 可查看当前 hook 状态、事件计数、matcher、command/http/prompt 数量和 timeout。
 
 配置示例：
 
@@ -322,6 +332,9 @@ YuCLI 支持可配置工具生命周期 hook。默认读取：
     "PreToolUse": [
       { "matcher": "write_file", "commands": ["python scripts/check_write.py"], "timeoutSeconds": 5 }
     ],
+    "UserPromptSubmit": [
+      { "matcher": "plan", "url": "https://example.com/yucli/prompt-hook" }
+    ],
     "PostToolUse": [
       { "matcher": "*", "command": "python scripts/log_tool.py" }
     ]
@@ -329,7 +342,7 @@ YuCLI 支持可配置工具生命周期 hook。默认读取：
 }
 ```
 
-`matcher` 支持精确工具名、`*`、前缀通配如 `mcp__*`。hook 命令通过 stdin 接收 JSON payload。
+`matcher` 支持精确值、`*`、前缀通配。工具事件匹配工具名，如 `write_file` / `mcp__*`；`UserPromptSubmit` 和顶层 Agent 事件匹配 mode，如 `react` / `plan` / `team`；SubAgent 事件匹配角色，如 `planner` / `worker` / `reviewer`；`PreCompact` 匹配 `short_term`。
 
 ### SubAgent Profiles
 
@@ -341,6 +354,8 @@ YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / 
 2. `.YuCLI/agents/*.json`
 
 同名 profile 由项目级覆盖用户级。可用 `/agents` 查看当前加载结果。存在 `WORKER` profile 时，worker 池由这些 profile 决定；否则回退默认 `worker-1` / `worker-2`。
+
+`tools` 是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前被拒绝。为空时不限制。
 
 ```json
 {

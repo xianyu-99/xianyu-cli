@@ -105,6 +105,8 @@ public class AgentOrchestrator {
         this.llmClient = Objects.requireNonNull(llmClient, "llmClient");
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry");
         this.memoryManager = Objects.requireNonNull(memoryManager, "memoryManager");
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
+        this.memoryManager.setHookManager(this.toolRegistry.getHookManager());
 
         TeamAgents team = createTeam(this.llmClient, this.toolRegistry, profiles);
         this.planner = team.planner();
@@ -176,6 +178,28 @@ public class AgentOrchestrator {
      * 运行多 Agent 协作任务
      */
     public String run(String userInput) {
+        long lifecycleStartNanos = System.nanoTime();
+        String result = "";
+        String error = "";
+        toolRegistry.getHookManager().runAgentStart("team", userInput, "agent");
+        try {
+            result = runInternal(userInput);
+            return result;
+        } catch (RuntimeException e) {
+            error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        } finally {
+            toolRegistry.getHookManager().runAgentFinish(
+                    "team",
+                    userInput,
+                    result,
+                    elapsedMillis(lifecycleStartNanos),
+                    error,
+                    CancellationContext.isCancelled());
+        }
+    }
+
+    private String runInternal(String userInput) {
         log.info("Multi-Agent run started: inputLength={}", userInput == null ? 0 : userInput.length());
         memoryManager.addUserMessage(userInput);
         if (CancellationContext.isCancelled()) {
@@ -254,6 +278,10 @@ public class AgentOrchestrator {
         memoryManager.addAssistantMessage("[多Agent结果] " + finalResult);
 
         return finalResult;
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     /**

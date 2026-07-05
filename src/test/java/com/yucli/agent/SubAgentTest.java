@@ -19,6 +19,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SubAgentTest {
@@ -54,6 +55,61 @@ class SubAgentTest {
         assertTrue(llm.systemPrompt.contains("Profile tool whitelist"));
         assertTrue(llm.systemPrompt.contains("read_file"));
         assertTrue(llm.systemPrompt.contains("search_code"));
+    }
+
+    @Test
+    void shouldFilterToolDefinitionsWithProfileWhitelist() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("repo-reader");
+        profile.setRole("worker");
+        profile.setInstructions("Only read files");
+        profile.setTools(List.of("read_file"));
+
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, new ToolRegistry());
+
+        worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        assertNotNull(llm.capturedTools);
+        assertEquals(List.of("read_file"), llm.capturedTools.stream().map(LlmClient.Tool::name).toList());
+    }
+
+    @Test
+    void shouldRejectUnauthorizedProfileToolCallWithoutTouchingDelegateRegistry() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("limited-worker");
+        profile.setRole("worker");
+        profile.setInstructions("Only read files");
+        profile.setTools(List.of("read_file"));
+
+        UnauthorizedThenFinalClient llm = new UnauthorizedThenFinalClient();
+        CountingToolRegistry tools = new CountingToolRegistry();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, tools);
+
+        AgentMessage result = worker.execute(AgentMessage.task("orchestrator", "run a command"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        assertEquals(AgentMessage.Type.RESULT, result.type());
+        assertEquals(0, tools.executeToolsCalls.get(), "Unauthorized tool must not reach delegate registry");
+        assertEquals(2, llm.chatCalls.get(), "SubAgent should continue after returning denial as tool result");
+        assertTrue(llm.denialToolMessage.contains("工具调用被拒绝"));
+        assertTrue(llm.denialToolMessage.contains("execute_command"));
+    }
+
+    @Test
+    void shouldKeepDefaultToolDefinitionsWhenProfileWhitelistIsEmpty() {
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        ToolRegistry tools = new ToolRegistry();
+        SubAgent worker = new SubAgent("default-worker", AgentRole.WORKER, llm, tools,
+                "No custom restrictions", List.of());
+
+        worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        List<String> expectedToolNames = tools.getToolDefinitions().stream().map(LlmClient.Tool::name).toList();
+        List<String> actualToolNames = llm.capturedTools.stream().map(LlmClient.Tool::name).toList();
+        assertEquals(expectedToolNames, actualToolNames);
     }
 
     @Test
@@ -193,6 +249,7 @@ class SubAgentTest {
 
     private static final class CapturingSystemPromptClient extends GLMClient {
         private String systemPrompt = "";
+        private List<Tool> capturedTools = List.of();
 
         private CapturingSystemPromptClient() {
             super("test-key");
@@ -205,6 +262,7 @@ class SubAgentTest {
 
         @Override
         public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) {
+            capturedTools = tools;
             systemPrompt = messages.stream()
                     .filter(message -> "system".equals(message.role()))
                     .findFirst()
@@ -295,6 +353,44 @@ class SubAgentTest {
                     10,
                     5
             );
+        }
+    }
+
+    private static final class UnauthorizedThenFinalClient extends GLMClient {
+        private final AtomicInteger chatCalls = new AtomicInteger();
+        private String denialToolMessage = "";
+
+        private UnauthorizedThenFinalClient() {
+            super("test-key");
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
+            return chat(messages, tools, StreamListener.NO_OP);
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) {
+            int call = chatCalls.incrementAndGet();
+            if (call == 1) {
+                return new ChatResponse(
+                        "assistant",
+                        "will call unauthorized tool",
+                        null,
+                        List.of(new ToolCall("call_1", new ToolCall.Function(
+                                "execute_command", "{\"command\":\"echo denied\"}"))),
+                        10,
+                        5
+                );
+            }
+
+            denialToolMessage = messages.stream()
+                    .filter(message -> "tool".equals(message.role()))
+                    .findFirst()
+                    .map(Message::content)
+                    .orElse("");
+            listener.onContentDelta("done");
+            return new ChatResponse("assistant", "done", null, null, 10, 5);
         }
     }
 

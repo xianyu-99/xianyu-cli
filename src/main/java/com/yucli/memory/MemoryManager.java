@@ -1,5 +1,6 @@
 package com.yucli.memory;
 
+import com.yucli.hook.HookManager;
 import com.yucli.llm.LlmClient;
 import com.yucli.session.SessionMessage;
 
@@ -31,6 +32,7 @@ public class MemoryManager {
     private final MemoryRetriever retriever;
     private final TokenBudget tokenBudget;
     private final ContextMode contextMode;
+    private HookManager hookManager = HookManager.disabled();
 
     public MemoryManager(LlmClient llmClient) {
         this(llmClient, 32768, 200000, null);
@@ -63,6 +65,10 @@ public class MemoryManager {
 
     public void setLlmClient(LlmClient llmClient) {
         this.compressor.setLlmClient(llmClient);
+    }
+
+    public void setHookManager(HookManager hookManager) {
+        this.hookManager = hookManager == null ? HookManager.disabled() : hookManager;
     }
 
     /**
@@ -177,6 +183,13 @@ public class MemoryManager {
         if (!tokenBudget.needsCompression(shortTermMemory)) {
             return false;
         }
+        hookManager.runPreCompact(
+                "short_term",
+                shortTermMemory.size(),
+                shortTermMemory.getTokenCount(),
+                shortTermMemory.getUsageRatio(),
+                contextMode.name().toLowerCase(),
+                "token_budget");
         System.out.println("📦 短期记忆接近预算上限，触发压缩...");
         String summary = compressor.compress(shortTermMemory);
         if (summary != null) {

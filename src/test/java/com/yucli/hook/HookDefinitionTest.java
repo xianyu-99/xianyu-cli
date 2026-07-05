@@ -11,6 +11,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class HookDefinitionTest {
 
     @Test
+    void parsesLifecycleEventNamesWithFlexibleSeparators() {
+        assertEquals(HookEvent.USER_PROMPT_SUBMIT, HookEvent.fromConfigName("UserPromptSubmit"));
+        assertEquals(HookEvent.USER_PROMPT_SUBMIT, HookEvent.fromConfigName("user_prompt_submit"));
+        assertEquals(HookEvent.AGENT_START, HookEvent.fromConfigName("agent-start"));
+        assertEquals(HookEvent.SUB_AGENT_FINISH, HookEvent.fromConfigName("SubAgentFinish"));
+        assertEquals(HookEvent.PRE_COMPACT, HookEvent.fromConfigName("pre_compact"));
+    }
+
+    @Test
     void matchesExactWildcardAndPrefixPatterns() {
         assertTrue(new HookDefinition("*", List.of("echo ok"), 1).matches("write_file"));
         assertTrue(new HookDefinition("write_file", List.of("echo ok"), 1).matches("WRITE_FILE"));
@@ -25,5 +34,20 @@ class HookDefinitionTest {
         definition.setCommands(List.of("", " echo two "));
 
         assertEquals(List.of("echo one", "echo two"), definition.normalizedCommands());
+    }
+
+    @Test
+    void normalizesHttpAndPromptExecutors() {
+        HookDefinition definition = new HookDefinition();
+        definition.setUrl(" https://hooks.example/pre ");
+        definition.setUrls(List.of("", " https://hooks.example/audit "));
+        definition.setPrompt(" allow only safe writes ");
+        definition.setPrompts(List.of(" ", " return deny for secrets "));
+
+        assertEquals(List.of("https://hooks.example/pre", "https://hooks.example/audit"),
+                definition.normalizedUrls());
+        assertEquals(List.of("allow only safe writes", "return deny for secrets"),
+                definition.normalizedPrompts());
+        assertTrue(definition.hasExecutors());
     }
 }

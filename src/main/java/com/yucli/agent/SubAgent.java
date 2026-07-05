@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yucli.agent.config.AgentProfile;
 import com.yucli.llm.LlmClient;
 import com.yucli.runtime.CancellationContext;
+import com.yucli.tool.ScopedToolRegistry;
 import com.yucli.tool.ToolRegistry;
 import com.yucli.tool.ToolRegistry.ToolExecutionResult;
 import com.yucli.tool.ToolRegistry.ToolInvocation;
@@ -18,6 +19,7 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -134,9 +136,12 @@ public class SubAgent {
         this.name = name;
         this.role = role;
         this.llmClient = llmClient;
-        this.toolRegistry = toolRegistry;
         this.customInstructions = customInstructions;
         this.toolWhitelist = sanitizeToolWhitelist(toolWhitelist);
+        this.toolRegistry = this.toolWhitelist.isEmpty()
+                ? toolRegistry
+                : new ScopedToolRegistry(toolRegistry, this.toolWhitelist);
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
         this.conversationHistory = new ArrayList<>();
         this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));
     }
@@ -197,6 +202,34 @@ public class SubAgent {
      * 避免多个 Agent 同时写入 System.out 造成输出交错。
      */
     public AgentMessage execute(AgentMessage task, PrintStream out) {
+        long lifecycleStartNanos = System.nanoTime();
+        AgentMessage result = null;
+        String error = "";
+        toolRegistry.getHookManager().runSubAgentStart(
+                name,
+                hookRoleName(),
+                task.fromAgent(),
+                task.type() == null ? "" : task.type().name(),
+                task.content());
+        try {
+            result = executeInternal(task, out);
+            return result;
+        } catch (RuntimeException e) {
+            error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        } finally {
+            String resultType = result == null ? (error.isBlank() ? "" : "ERROR") : result.type().name();
+            String content = result == null ? error : result.content();
+            toolRegistry.getHookManager().runSubAgentFinish(
+                    name,
+                    hookRoleName(),
+                    resultType,
+                    content,
+                    elapsedMillis(lifecycleStartNanos));
+        }
+    }
+
+    private AgentMessage executeInternal(AgentMessage task, PrintStream out) {
         log.info("[{}] executing task from {}: type={}", name, task.fromAgent(), task.type());
         String taskContent = task.content();
 
@@ -282,6 +315,10 @@ public class SubAgent {
                 return AgentMessage.error(name, role, "LLM 调用失败: " + e.getMessage());
             }
         }
+    }
+
+    private String hookRoleName() {
+        return role == null ? "" : role.name().toLowerCase(Locale.ROOT);
     }
 
     private AgentMessage cancelledResult(SubAgentStreamRenderer streamRenderer) {
@@ -422,6 +459,10 @@ public class SubAgent {
         return AnsiStyle.subtle(String.format(
                 "📊 Token: %d 输入 / %d 输出 / %d 合计 | ⏱ %.1fs",
                 inputTokens, outputTokens, inputTokens + outputTokens, elapsedSeconds));
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     public String getName() {

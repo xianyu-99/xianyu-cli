@@ -5,7 +5,13 @@ import java.util.Locale;
 
 public enum HookEvent {
     PRE_TOOL_USE("PreToolUse"),
-    POST_TOOL_USE("PostToolUse");
+    POST_TOOL_USE("PostToolUse"),
+    USER_PROMPT_SUBMIT("UserPromptSubmit"),
+    AGENT_START("AgentStart"),
+    AGENT_FINISH("AgentFinish"),
+    SUB_AGENT_START("SubAgentStart"),
+    SUB_AGENT_FINISH("SubAgentFinish"),
+    PRE_COMPACT("PreCompact");
 
     private final String configName;
 

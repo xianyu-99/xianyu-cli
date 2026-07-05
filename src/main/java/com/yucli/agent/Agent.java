@@ -160,12 +160,15 @@ public class Agent {
         this.conversationHistory = new ArrayList<>();
         int contextWindow = llmClient != null ? llmClient.maxContextWindow() : 128_000;
         this.memoryManager = new MemoryManager(llmClient, 32768, contextWindow);
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
+        this.memoryManager.setHookManager(this.toolRegistry.getHookManager());
         conversationHistory.add(LlmClient.Message.system(buildSystemPrompt(memoryManager.getContextMode())));
     }
 
     public void setLlmClient(LlmClient llmClient) {
         this.llmClient = llmClient;
         this.memoryManager.setLlmClient(llmClient);
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
     }
 
     public void setMcpServerManager(com.yucli.mcp.McpServerManager mcpServerManager) {
@@ -184,6 +187,28 @@ public class Agent {
      * 运行 Agent 循环
      */
     public String run(String userInput) {
+        long lifecycleStartNanos = System.nanoTime();
+        String result = "";
+        String error = "";
+        toolRegistry.getHookManager().runAgentStart("react", userInput, "agent");
+        try {
+            result = runInternal(userInput);
+            return result;
+        } catch (RuntimeException e) {
+            error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        } finally {
+            toolRegistry.getHookManager().runAgentFinish(
+                    "react",
+                    userInput,
+                    result,
+                    elapsedMillis(lifecycleStartNanos),
+                    error,
+                    CancellationContext.isCancelled());
+        }
+    }
+
+    private String runInternal(String userInput) {
         log.info("ReAct run started: inputLength={}", userInput == null ? 0 : userInput.length());
         // 存入短期记忆
         memoryManager.addUserMessage(userInput);
@@ -422,6 +447,10 @@ public class Agent {
         return AnsiStyle.subtle(String.format(
                 "📊 Token: %d 输入 / %d 输出 / %d 合计%s | ⏱ %.1fs",
                 inputTokens, outputTokens, inputTokens + outputTokens, cacheHint, elapsedSeconds));
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     private void appendReasoning(StringBuilder reasoningTranscript, String reasoningContent) {

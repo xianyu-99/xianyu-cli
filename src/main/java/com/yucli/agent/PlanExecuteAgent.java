@@ -148,12 +148,36 @@ public class PlanExecuteAgent {
         this.planner = planner != null ? planner : new Planner(llmClient);
         this.reviewHandler = reviewHandler == null ? (goal, plan) -> PlanReviewDecision.execute() : reviewHandler;
         this.memoryManager = memoryManager != null ? memoryManager : new MemoryManager(llmClient);
+        this.toolRegistry.getHookManager().setLlmClient(llmClient);
+        this.memoryManager.setHookManager(this.toolRegistry.getHookManager());
     }
 
     /**
      * 运行任务（自动判断是否需要规划）
      */
     public String run(String userInput) {
+        long lifecycleStartNanos = System.nanoTime();
+        String result = "";
+        String error = "";
+        toolRegistry.getHookManager().runAgentStart("plan", userInput, "agent");
+        try {
+            result = runInternal(userInput);
+            return result;
+        } catch (RuntimeException e) {
+            error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        } finally {
+            toolRegistry.getHookManager().runAgentFinish(
+                    "plan",
+                    userInput,
+                    result,
+                    elapsedMillis(lifecycleStartNanos),
+                    error,
+                    CancellationContext.isCancelled());
+        }
+    }
+
+    private String runInternal(String userInput) {
         log.info("Plan run started: inputLength={}", userInput == null ? 0 : userInput.length());
         memoryManager.addUserMessage(userInput);
         StreamState streamState = new StreamState();
@@ -576,6 +600,10 @@ public class PlanExecuteAgent {
         return AnsiStyle.subtle(String.format(
                 "📊 Token: %d 输入 / %d 输出 / %d 合计 | ⏱ %.1fs",
                 inputTokens, outputTokens, inputTokens + outputTokens, elapsedSeconds));
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     private static final class StreamState {

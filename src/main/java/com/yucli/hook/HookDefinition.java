@@ -11,6 +11,10 @@ public class HookDefinition {
     private String matcher = "*";
     private String command;
     private List<String> commands = new ArrayList<>();
+    private String url;
+    private List<String> urls = new ArrayList<>();
+    private String prompt;
+    private List<String> prompts = new ArrayList<>();
     private Integer timeoutSeconds;
 
     public HookDefinition() {
@@ -46,6 +50,38 @@ public class HookDefinition {
         this.commands = commands == null ? new ArrayList<>() : commands;
     }
 
+    public String getUrl() {
+        return url;
+    }
+
+    public void setUrl(String url) {
+        this.url = url;
+    }
+
+    public List<String> getUrls() {
+        return urls;
+    }
+
+    public void setUrls(List<String> urls) {
+        this.urls = urls == null ? new ArrayList<>() : urls;
+    }
+
+    public String getPrompt() {
+        return prompt;
+    }
+
+    public void setPrompt(String prompt) {
+        this.prompt = prompt;
+    }
+
+    public List<String> getPrompts() {
+        return prompts;
+    }
+
+    public void setPrompts(List<String> prompts) {
+        this.prompts = prompts == null ? new ArrayList<>() : prompts;
+    }
+
     public Integer getTimeoutSeconds() {
         return timeoutSeconds;
     }
@@ -55,12 +91,30 @@ public class HookDefinition {
     }
 
     public List<String> normalizedCommands() {
+        return normalize(command, commands);
+    }
+
+    public List<String> normalizedUrls() {
+        return normalize(url, urls);
+    }
+
+    public List<String> normalizedPrompts() {
+        return normalize(prompt, prompts);
+    }
+
+    public boolean hasExecutors() {
+        return !normalizedCommands().isEmpty()
+                || !normalizedUrls().isEmpty()
+                || !normalizedPrompts().isEmpty();
+    }
+
+    private static List<String> normalize(String singleValue, List<String> values) {
         List<String> normalized = new ArrayList<>();
-        if (command != null && !command.isBlank()) {
-            normalized.add(command.trim());
+        if (singleValue != null && !singleValue.isBlank()) {
+            normalized.add(singleValue.trim());
         }
-        if (commands != null) {
-            for (String value : commands) {
+        if (values != null) {
+            for (String value : values) {
                 if (value != null && !value.isBlank()) {
                     normalized.add(value.trim());
                 }

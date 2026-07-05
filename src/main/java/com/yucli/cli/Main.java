@@ -8,6 +8,7 @@ import com.yucli.agent.config.AgentProfile;
 import com.yucli.agent.config.AgentProfileLoader;
 import com.yucli.ProductInfo;
 import com.yucli.config.YuCLIConfig;
+import com.yucli.hook.HookDecision;
 import com.yucli.hook.HookManager;
 import com.yucli.hitl.HitlToolRegistry;
 import com.yucli.hitl.TerminalHitlHandler;
@@ -166,6 +167,7 @@ public class Main {
             TerminalHitlHandler hitlHandler = new TerminalHitlHandler(false);
             Path projectDir = Path.of(".").toAbsolutePath().normalize();
             HookManager hookManager = HookManager.loadDefault(projectDir);
+            hookManager.setLlmClient(llmClient);
             HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(
                     hitlHandler,
                     hookManager);
@@ -566,6 +568,7 @@ public class Main {
                                 config.setDefaultProvider(provider);
                                 config.save();
                                 reactAgent.setLlmClient(llmClient);
+                                hookManager.setLlmClient(llmClient);
                                 System.out.println("✅ 已切换到: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")");
                                 System.out.println("   对话上下文已保留，使用 /clear 可清空\n");
                             }
@@ -725,6 +728,21 @@ public class Main {
                 }
 
                 // 运行 Agent
+                String runMode = resolveRunMode(nextTaskUsePlanMode, nextTaskUseTeamMode, command.type());
+                HookDecision promptDecision = hookManager.runUserPromptSubmit(
+                        input,
+                        runMode,
+                        "cli",
+                        command.type().name());
+                if (!promptDecision.allowed()) {
+                    System.out.println("[Hook] UserPromptSubmit 拒绝: " + promptDecision.reason() + "\n");
+                    continue;
+                }
+                input = promptFromDecision(promptDecision, input).trim();
+                if (input.isEmpty()) {
+                    System.out.println("[Hook] UserPromptSubmit 将输入改为空，已跳过本次任务。\n");
+                    continue;
+                }
                 input = mentionExpander.expand(input);
                 System.out.println();
                 final String taskInput = input;
@@ -792,6 +810,32 @@ public class Main {
         return new AgentOrchestrator(llmClient, reactAgent.getToolRegistry(), reactAgent.getMemoryManager());
     }
 
+    private static String resolveRunMode(boolean nextTaskUsePlanMode, boolean nextTaskUseTeamMode,
+                                         CliCommandParser.CommandType commandType) {
+        if (nextTaskUsePlanMode || commandType == CliCommandParser.CommandType.SWITCH_PLAN) {
+            return HeadlessRunMode.PLAN.value();
+        }
+        if (nextTaskUseTeamMode || commandType == CliCommandParser.CommandType.SWITCH_TEAM) {
+            return HeadlessRunMode.TEAM.value();
+        }
+        return HeadlessRunMode.REACT.value();
+    }
+
+    private static String normalizeHeadlessMode(String mode) {
+        try {
+            return HeadlessRunMode.parse(mode).value();
+        } catch (Exception e) {
+            return mode == null || mode.isBlank() ? HeadlessRunMode.REACT.value() : mode.trim().toLowerCase();
+        }
+    }
+
+    private static String promptFromDecision(HookDecision decision, String originalPrompt) {
+        if (decision == null || !decision.modified() || decision.arguments() == null) {
+            return originalPrompt == null ? "" : originalPrompt;
+        }
+        return decision.arguments().path("prompt").asText(originalPrompt == null ? "" : originalPrompt);
+    }
+
     private static PermissionProfile loadPermissionProfile(Path projectDir) {
         try {
             return PermissionProfileLoader.loadDefault(projectDir);
@@ -831,11 +875,38 @@ public class Main {
 
         Path projectDir = Path.of(".").toAbsolutePath().normalize();
         HookManager hookManager = HookManager.loadDefault(projectDir);
+        hookManager.setLlmClient(llmClient);
         HitlToolRegistry toolRegistry = new HitlToolRegistry(new TerminalHitlHandler(false), hookManager);
         toolRegistry.setProjectPath(projectDir.toString());
         toolRegistry.setPermissionProfile(loadPermissionProfile(projectDir));
         toolRegistry.enableCheckpointing();
         Agent reactAgent = new Agent(llmClient, toolRegistry);
+
+        HookDecision promptDecision = hookManager.runUserPromptSubmit(
+                options.task(),
+                normalizeHeadlessMode(options.mode()),
+                "headless",
+                "RUN");
+        if (!promptDecision.allowed()) {
+            HeadlessRunResult result = HeadlessRunResult.failure(
+                    options.task(),
+                    options.mode(),
+                    new IllegalStateException("[Hook] UserPromptSubmit 拒绝: " + promptDecision.reason()),
+                    0);
+            writeHeadlessResult(result, options.jsonl());
+            return 1;
+        }
+        String hookedTask = promptFromDecision(promptDecision, options.task()).trim();
+        if (hookedTask.isEmpty()) {
+            HeadlessRunResult result = HeadlessRunResult.failure(
+                    options.task(),
+                    options.mode(),
+                    new IllegalStateException("[Hook] UserPromptSubmit 将输入改为空"),
+                    0);
+            writeHeadlessResult(result, options.jsonl());
+            return 1;
+        }
+        options = new HeadlessCliOptions(hookedTask, options.mode(), options.jsonl());
 
         HeadlessRunner runner = new HeadlessRunner((task, mode) -> switch (mode) {
             case REACT -> reactAgent.run(task);
@@ -1399,6 +1470,11 @@ public class Main {
         System.out.println("   enabled: " + status.enabled());
         System.out.println("   project: " + status.projectPath());
         System.out.println("   total: " + status.totalHooks());
+        if (!status.executorCounts().isEmpty()) {
+            System.out.println("   executors: command=" + status.executorCounts().getOrDefault("command", 0)
+                    + " http=" + status.executorCounts().getOrDefault("http", 0)
+                    + " prompt=" + status.executorCounts().getOrDefault("prompt", 0));
+        }
         status.hookCounts().forEach((event, count) ->
                 System.out.println("   " + event + ": " + count));
         if (!status.hooks().isEmpty()) {
@@ -1406,7 +1482,9 @@ public class Main {
             for (HookManager.HookSummary hook : status.hooks()) {
                 System.out.println("     - " + hook.event()
                         + " matcher=" + hook.matcher()
-                        + " commands=" + hook.commands().size()
+                        + " commands=" + hook.commandCount()
+                        + " http=" + hook.httpCount()
+                        + " prompt=" + hook.promptCount()
                         + " timeout=" + hook.timeoutSeconds() + "s");
             }
         }

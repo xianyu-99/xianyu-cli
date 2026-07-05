@@ -1,13 +1,21 @@
 package com.yucli.agent;
 
+import com.yucli.hook.HookDefinition;
+import com.yucli.hook.HookEvent;
+import com.yucli.hook.HookManager;
 import com.yucli.llm.LlmClient;
 import com.yucli.session.Session;
 import com.yucli.session.SessionMessage;
 import com.yucli.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,6 +42,24 @@ class AgentTest {
                 "assistant".equals(m.role()) && "restored-assistant-message".equals(m.content())));
         assertFalse(llm.lastMessages.stream().anyMatch(m ->
                 "user".equals(m.role()) && "old-session-message".equals(m.content())));
+    }
+
+    @Test
+    void runTriggersAgentLifecycleHooks(@TempDir Path tempDir) throws Exception {
+        Map<HookEvent, List<HookDefinition>> hooks = new EnumMap<>(HookEvent.class);
+        hooks.put(HookEvent.AGENT_START, List.of(
+                new HookDefinition("react", List.of("echo start>>agent-hooks.log"), 3)));
+        hooks.put(HookEvent.AGENT_FINISH, List.of(
+                new HookDefinition("react", List.of("echo finish>>agent-hooks.log"), 3)));
+        ToolRegistry tools = new ToolRegistry(new HookManager(hooks, tempDir));
+        tools.setProjectPath(tempDir.toString());
+
+        Agent agent = new Agent(new CapturingLlmClient(), tools);
+        agent.run("hello");
+
+        String hookLog = Files.readString(tempDir.resolve("agent-hooks.log"));
+        assertTrue(hookLog.contains("start"));
+        assertTrue(hookLog.contains("finish"));
     }
 
     private static final class CapturingLlmClient implements LlmClient {
