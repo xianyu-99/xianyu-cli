@@ -81,6 +81,58 @@ class ScopedToolRegistryTest {
     }
 
     @Test
+    void shouldFilterAndRejectDeniedToolsWithoutTouchingDelegate() {
+        FakeToolRegistry delegate = new FakeToolRegistry();
+        ScopedToolRegistry scoped = new ScopedToolRegistry(
+                delegate,
+                List.of("*"),
+                List.of(),
+                List.of(),
+                null,
+                List.of("execute_command"),
+                List.of());
+
+        List<String> toolNames = scoped.getToolDefinitions().stream()
+                .map(LlmClient.Tool::name)
+                .toList();
+        List<ToolRegistry.ToolExecutionResult> results = scoped.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("call_1", "execute_command",
+                        "{\"command\":\"echo denied\"}")
+        ));
+
+        assertFalse(toolNames.contains("execute_command"));
+        assertEquals(0, delegate.executeToolsCalls.get());
+        assertTrue(results.get(0).result().contains("deniedTools"));
+    }
+
+    @Test
+    void shouldRestrictExecuteCommandToAllowedCommandsWithoutTouchingDelegate() {
+        FakeToolRegistry delegate = new FakeToolRegistry();
+        ScopedToolRegistry scoped = new ScopedToolRegistry(
+                delegate,
+                List.of(),
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                List.of("git status", "mvn test*"));
+
+        List<ToolRegistry.ToolExecutionResult> denied = scoped.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("call_1", "execute_command",
+                        "{\"command\":\"git push origin main\"}")
+        ));
+        assertEquals(0, delegate.executeToolsCalls.get());
+        assertTrue(denied.get(0).result().contains("allowedCommands"));
+
+        List<ToolRegistry.ToolExecutionResult> allowed = scoped.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("call_2", "execute_command",
+                        "{\"command\":\"mvn test -Dtest=ScopedToolRegistryTest\"}")
+        ));
+        assertEquals(1, delegate.executeToolsCalls.get());
+        assertEquals("delegate-execute_command", allowed.get(0).result());
+    }
+
+    @Test
     void shouldRejectPathOutsideAllowedPathsWithoutTouchingDelegate(@TempDir Path tempDir) {
         FakeToolRegistry delegate = new FakeToolRegistry();
         delegate.setProjectPath(tempDir.toString());

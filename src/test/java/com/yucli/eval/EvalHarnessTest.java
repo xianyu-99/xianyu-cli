@@ -9,6 +9,7 @@ import java.io.File;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EvalHarnessTest {
     private static final Pattern SAFE_ID = Pattern.compile("[a-z0-9][a-z0-9._-]*");
+    private static final Set<String> SUPPORTED_MODES = Set.of("react", "plan", "team");
     private static final List<Pattern> DANGEROUS_SCRIPT_PATTERNS = Arrays.asList(
             Pattern.compile("(?i)(^|[\\s;&|])sudo([\\s;&|]|$)"),
             Pattern.compile("(?i)\\brm\\s+-[^\\r\\n;|&]*r[^\\r\\n;|&]*f[^\\r\\n;|&]*\\s+/([\\s;&|]|$)"),
@@ -58,13 +60,36 @@ class EvalHarnessTest {
             assertNotNull(testCase.getInstruction());
             assertFalse(testCase.getInstruction().isBlank());
 
-            assertNotNull(testCase.getVerifyScript());
-            assertFalse(testCase.getVerifyScript().isBlank(),
-                    "Eval case verifyScript must be present and non-blank: " + testCase.getId());
+            assertTrue(SUPPORTED_MODES.contains(normalizeMode(testCase.getMode())),
+                    "Eval case mode must be one of " + SUPPORTED_MODES + ": " + testCase.getId());
+
+            assertTrue(hasVerifier(testCase),
+                    "Eval case must define verifyScript, or both verifyScriptWindows and verifyScriptUnix: "
+                            + testCase.getId());
 
             assertScriptDoesNotContainDangerousFragment(testCase.getId(), "setupScript", testCase.getSetupScript());
+            assertScriptDoesNotContainDangerousFragment(testCase.getId(), "setupScriptWindows", testCase.getSetupScriptWindows());
+            assertScriptDoesNotContainDangerousFragment(testCase.getId(), "setupScriptUnix", testCase.getSetupScriptUnix());
             assertScriptDoesNotContainDangerousFragment(testCase.getId(), "verifyScript", testCase.getVerifyScript());
+            assertScriptDoesNotContainDangerousFragment(testCase.getId(), "verifyScriptWindows", testCase.getVerifyScriptWindows());
+            assertScriptDoesNotContainDangerousFragment(testCase.getId(), "verifyScriptUnix", testCase.getVerifyScriptUnix());
         }
+    }
+
+    private static String normalizeMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return "react";
+        }
+        return mode.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean hasVerifier(EvalTestCase testCase) {
+        return hasText(testCase.getVerifyScript())
+                || (hasText(testCase.getVerifyScriptWindows()) && hasText(testCase.getVerifyScriptUnix()));
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private static void assertScriptDoesNotContainDangerousFragment(String caseId, String fieldName, String script) {

@@ -76,6 +76,29 @@ class SubAgentTest {
     }
 
     @Test
+    void shouldApplyProfileDeniedToolsToToolDefinitions() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("safe-worker");
+        profile.setRole("worker");
+        profile.setInstructions("No shell access");
+        profile.setDeniedTools(List.of("execute_command"));
+        profile.setAllowedCommands(List.of("git status"));
+
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, new ToolRegistry());
+
+        worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+
+        List<String> names = llm.capturedTools.stream().map(LlmClient.Tool::name).toList();
+        assertFalse(names.contains("execute_command"));
+        assertTrue(names.contains("read_file"));
+        assertTrue(llm.systemPrompt.contains("Profile execution scope"));
+        assertTrue(llm.systemPrompt.contains("execute_command"));
+        assertTrue(llm.systemPrompt.contains("git status"));
+    }
+
+    @Test
     void shouldRejectUnauthorizedProfileToolCallWithoutTouchingDelegateRegistry() {
         AgentProfile profile = new AgentProfile();
         profile.setName("limited-worker");

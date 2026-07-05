@@ -47,6 +47,8 @@ class AgentProfileLoaderTest {
                   "role": "REVIEWER",
                   "instructions": "Project reviewer profile",
                   "tools": ["read_file", "search_code"],
+                  "deniedTools": ["write_file", "mcp__danger__*"],
+                  "allowedCommands": ["git status", "mvn test*"],
                   "allowedPaths": ["src", "README.md"],
                   "deniedCommands": ["git push"],
                   "workingDirectory": "src",
@@ -70,6 +72,8 @@ class AgentProfileLoaderTest {
         assertEquals(AgentRole.REVIEWER, reviewer.getRole());
         assertEquals("Project reviewer profile", reviewer.getInstructions());
         assertEquals(List.of("read_file", "search_code"), reviewer.getTools());
+        assertEquals(List.of("write_file", "mcp__danger__*"), reviewer.getDeniedTools());
+        assertEquals(List.of("git status", "mvn test*"), reviewer.getAllowedCommands());
         assertEquals(List.of("src", "README.md"), reviewer.getAllowedPaths());
         assertEquals(List.of("git push"), reviewer.getDeniedCommands());
         assertEquals("src", reviewer.getWorkingDirectory());
@@ -95,6 +99,8 @@ class AgentProfileLoaderTest {
         AgentProfile worker = loader.load().get("worker");
 
         assertEquals(List.of(), worker.getTools());
+        assertEquals(List.of(), worker.getDeniedTools());
+        assertEquals(List.of(), worker.getAllowedCommands());
         assertEquals(List.of(), worker.getAllowedPaths());
         assertEquals(List.of(), worker.getDeniedCommands());
         assertNull(worker.getWorkingDirectory());

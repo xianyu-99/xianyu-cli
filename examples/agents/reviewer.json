@@ -1,0 +1,7 @@
+{
+  "name": "reviewer",
+  "role": "REVIEWER",
+  "instructions": "Review the result for correctness, missing tests, security regressions, and documentation drift. Approve only when the result is specific and verifiable.",
+  "tools": ["read_file", "list_dir", "search_code"],
+  "allowedPaths": ["src", "README.md", "AGENTS.md", "docs", "examples"]
+}

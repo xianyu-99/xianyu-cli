@@ -22,8 +22,10 @@ public class ScopedToolRegistry extends ToolRegistry {
 
     private final ToolRegistry delegate;
     private final List<String> allowedToolMatchers;
+    private final List<String> deniedToolMatchers;
     private final List<String> allowedPathMatchers;
     private final List<String> deniedCommandMatchers;
+    private final List<String> allowedCommandMatchers;
     private final String workingDirectory;
 
     public ScopedToolRegistry(ToolRegistry delegate, List<String> allowedToolMatchers) {
@@ -33,10 +35,20 @@ public class ScopedToolRegistry extends ToolRegistry {
     public ScopedToolRegistry(ToolRegistry delegate, List<String> allowedToolMatchers,
                               List<String> allowedPathMatchers, List<String> deniedCommandMatchers,
                               String workingDirectory) {
+        this(delegate, allowedToolMatchers, allowedPathMatchers, deniedCommandMatchers,
+                workingDirectory, List.of(), List.of());
+    }
+
+    public ScopedToolRegistry(ToolRegistry delegate, List<String> allowedToolMatchers,
+                              List<String> allowedPathMatchers, List<String> deniedCommandMatchers,
+                              String workingDirectory, List<String> deniedToolMatchers,
+                              List<String> allowedCommandMatchers) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.allowedToolMatchers = sanitizeMatchers(allowedToolMatchers);
+        this.deniedToolMatchers = sanitizeMatchers(deniedToolMatchers);
         this.allowedPathMatchers = sanitizeMatchers(allowedPathMatchers);
         this.deniedCommandMatchers = sanitizeMatchers(deniedCommandMatchers);
+        this.allowedCommandMatchers = sanitizeMatchers(allowedCommandMatchers);
         this.workingDirectory = workingDirectory == null || workingDirectory.isBlank()
                 ? null
                 : workingDirectory.trim();
@@ -45,7 +57,7 @@ public class ScopedToolRegistry extends ToolRegistry {
     @Override
     public List<LlmClient.Tool> getToolDefinitions() {
         List<LlmClient.Tool> definitions = delegate.getToolDefinitions();
-        if (isUnrestricted()) {
+        if (!hasToolDefinitionRestrictions()) {
             return definitions;
         }
         return definitions.stream()
@@ -122,14 +134,19 @@ public class ScopedToolRegistry extends ToolRegistry {
     }
 
     public boolean isAllowed(String toolName) {
-        if (isUnrestricted()) {
-            return true;
+        if (firstMatchingToolMatcher(deniedToolMatchers, toolName) != null) {
+            return false;
         }
-        return allowedToolMatchers.stream().anyMatch(matcher -> matches(matcher, toolName));
+        return allowedToolMatchers.isEmpty()
+                || allowedToolMatchers.stream().anyMatch(matcher -> matches(matcher, toolName));
     }
 
     public List<String> allowedToolMatchers() {
         return allowedToolMatchers;
+    }
+
+    public List<String> deniedToolMatchers() {
+        return deniedToolMatchers;
     }
 
     public List<String> allowedPathMatchers() {
@@ -138,6 +155,10 @@ public class ScopedToolRegistry extends ToolRegistry {
 
     public List<String> deniedCommandMatchers() {
         return deniedCommandMatchers;
+    }
+
+    public List<String> allowedCommandMatchers() {
+        return allowedCommandMatchers;
     }
 
     public String workingDirectory() {
@@ -159,14 +180,16 @@ public class ScopedToolRegistry extends ToolRegistry {
         return toolName.equals(normalizedMatcher);
     }
 
-    private boolean isUnrestricted() {
-        return allowedToolMatchers.isEmpty();
+    private boolean hasToolDefinitionRestrictions() {
+        return !allowedToolMatchers.isEmpty() || !deniedToolMatchers.isEmpty();
     }
 
     private boolean hasNoRestrictions() {
         return allowedToolMatchers.isEmpty()
+                && deniedToolMatchers.isEmpty()
                 && allowedPathMatchers.isEmpty()
                 && deniedCommandMatchers.isEmpty()
+                && allowedCommandMatchers.isEmpty()
                 && workingDirectory == null;
     }
 
@@ -183,6 +206,11 @@ public class ScopedToolRegistry extends ToolRegistry {
 
     private String deniedResult(String toolName) {
         String displayName = toolName == null || toolName.isBlank() ? "<unknown>" : toolName;
+        String deniedMatcher = firstMatchingToolMatcher(deniedToolMatchers, toolName);
+        if (deniedMatcher != null) {
+            return "[SubAgent Scope] 工具调用被拒绝: 匹配 deniedTools: " + deniedMatcher
+                    + "，工具: " + displayName;
+        }
         return "[SubAgent Scope] 工具调用被拒绝: 未授权工具 " + displayName
                 + "，允许范围: " + String.join(", ", allowedToolMatchers);
     }
@@ -203,6 +231,11 @@ public class ScopedToolRegistry extends ToolRegistry {
             if (matchesCommand(matcher, command)) {
                 return "[SubAgent Scope] 工具调用被拒绝: 命令匹配 deniedCommands: " + matcher;
             }
+        }
+        if (!allowedCommandMatchers.isEmpty()
+                && allowedCommandMatchers.stream().noneMatch(matcher -> matchesCommand(matcher, command))) {
+            return "[SubAgent Scope] 工具调用被拒绝: 命令不在 allowedCommands 内: "
+                    + command + "，允许范围: " + String.join(", ", allowedCommandMatchers);
         }
         if (workingDirectory != null && !isCurrentProjectInsideWorkingDirectory()) {
             return "[SubAgent Scope] 工具调用被拒绝: 当前项目目录不在 SubAgent workingDirectory 内: "
@@ -259,6 +292,15 @@ public class ScopedToolRegistry extends ToolRegistry {
             return normalizedCommand.startsWith(normalizedMatcher.substring(0, normalizedMatcher.length() - 1));
         }
         return normalizedCommand.contains(normalizedMatcher);
+    }
+
+    private static String firstMatchingToolMatcher(List<String> matchers, String toolName) {
+        for (String matcher : matchers) {
+            if (matches(matcher, toolName)) {
+                return matcher;
+            }
+        }
+        return null;
     }
 
     private static String parseArgument(String argumentsJson, String key) {

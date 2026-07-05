@@ -163,6 +163,8 @@ mvn test -Dtest=ExecutionPlanTest
 mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
 ```
 
+EvalHarness 当前读取 `src/test/resources/eval/cases.json`，支持 `mode=react|plan|team`（默认 `react`）和平台脚本字段 `setupScriptWindows` / `setupScriptUnix` / `verifyScriptWindows` / `verifyScriptUnix`。每个用例在独立临时目录运行，`YuCLI.audit.dir` 会临时指向该目录下的 `audit/`，hook 只加载该目录内的 `.YuCLI/hooks.json`。
+
 ## 当前产品行为
 
 ### 1. ReAct 模式
@@ -264,7 +266,8 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
   - `PLANNER`：优先使用名为 `planner` 的 profile，否则使用第一个 planner profile，否则回退默认 planner
   - `WORKER`：只要存在 worker profile，worker 池大小就等于 worker profile 数量；没有 worker profile 时回退默认 `worker-1` / `worker-2`
   - `REVIEWER`：优先使用名为 `reviewer` 的 profile，否则使用第一个 reviewer profile，否则回退默认 reviewer
-- `SubAgent` 会在默认角色 prompt 后追加 profile 的 `instructions` 与工具白名单提示；`tools` 同时是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前由 `ScopedToolRegistry` 拒绝。为空时不限制。`allowedPaths` / `deniedCommands` / `workingDirectory` 可给单个 SubAgent 增加独立路径和命令 scope，同样由 `ScopedToolRegistry` 运行时硬拦截。
+- `SubAgent` 会在默认角色 prompt 后追加 profile 的 `instructions` 与工具白名单提示；`tools` 同时是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前由 `ScopedToolRegistry` 拒绝。为空时不限制。`deniedTools` / `allowedCommands` / `allowedPaths` / `deniedCommands` / `workingDirectory` 可给单个 SubAgent 增加独立工具、命令和路径 scope，同样由 `ScopedToolRegistry` 运行时硬拦截。`deniedTools` 会从工具定义和执行两侧生效；`allowedCommands` 为空时不限制，非空时 `execute_command` 只能执行匹配的命令，且 `deniedCommands` 优先。
+- 官方示例 profile 位于 `examples/agents/*.json`，默认不自动加载；复制到 `.YuCLI/agents/` 或 `~/.YuCLI/agents/` 后生效
 - 当前 JSON 格式：
 
 ```json
@@ -273,6 +276,8 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
   "role": "REVIEWER",
   "instructions": "审查执行结果，指出风险和缺口。",
   "tools": ["read_file", "search_code"],
+  "deniedTools": ["write_file", "mcp__danger__*"],
+  "allowedCommands": ["git status", "mvn test*"],
   "allowedPaths": ["src", "README.md"],
   "deniedCommands": ["git push", "curl*"],
   "workingDirectory": "src",
@@ -280,7 +285,7 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
 }
 ```
 
-- `name`、`role`、`instructions` 必填；`role` 支持 `PLANNER` / `WORKER` / `REVIEWER`（大小写不敏感）；`tools` / `allowedPaths` / `deniedCommands` 默认空列表；`workingDirectory` / `model` 可选，其中 `model` 仅解析保存，暂不切换运行模型
+- `name`、`role`、`instructions` 必填；`role` 支持 `PLANNER` / `WORKER` / `REVIEWER`（大小写不敏感）；`tools` / `deniedTools` / `allowedCommands` / `allowedPaths` / `deniedCommands` 默认空列表；`workingDirectory` / `model` 可选，其中 `model` 仅解析保存，暂不切换运行模型
 
 ### 7. HITL 审批系统
 
@@ -341,13 +346,14 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `command` / `commands`：本地命令，通过 stdin 接收 JSON payload
   - `url` / `urls`：HTTP POST JSON payload，2xx 视为成功
   - `prompt` / `prompts`：使用当前 LLM 做结构化 hook 决策，不传工具列表，避免 hook 内部递归 tool-call；未配置 LLM 时阻断型事件会拒绝，非阻断事件只 warning
-- HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`retryBackoffMillis`：`authToken` 自动补 `Authorization: Bearer ...`，`signatureSecret` 生成 `X-YuCLI-Signature: sha256=...`，429/5xx/超时/网络错误按 `retryCount` 重试。hook 错误输出会对 token/key/password/secret/authorization 做脱敏
+- HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`retryBackoffMillis`：`authToken` 自动补 `Authorization: Bearer ...`，`signatureSecret` 生成 `X-YuCLI-Signature: sha256=...`，429/5xx/超时/网络错误按 `retryCount` 重试。HTTP hook 的 `url` / `urls`、`headers` 值、`authToken`、`signatureSecret` 支持 `${ENV_NAME}` 环境变量占位符；缺失变量会导致当前 hook 配置文件被忽略，stderr 只打印缺失变量名，不打印原始配置值。hook 错误输出会对 token/key/password/secret/authorization 做脱敏；`/hooks` 会展示 URL，secret 优先放在 header / `authToken` / `signatureSecret` 中
 - 非阻断事件可配置 `async: true` 后台执行，适合通知类 hook；阻断型事件仍同步执行，因为需要决定是否放行或修改参数
 - `matcher` 支持精确值、`*`、前缀通配：
   - 工具事件匹配工具名，如 `write_file` / `mcp__*`
   - `UserPromptSubmit` 和顶层 Agent 事件匹配 mode：`react` / `plan` / `team`
   - SubAgent 事件匹配角色：`planner` / `worker` / `reviewer`
   - `PreCompact` 匹配 `short_term`
+- 官方 hook recipes 位于 `examples/hooks/`，默认不自动加载；复制 `examples/hooks/hooks.json` 到 `.YuCLI/hooks.json` 后生效。示例脚本只使用 Python 标准库，启用前应按项目需要审阅和调整规则
 - hook payload 固定包含 `event / hook_target / project_path / timestamp / arguments_raw / arguments`；工具事件额外包含 `tool_name / tool_call_id / result / elapsed_ms`，生命周期事件会把核心字段（如 `prompt`、`agent_type`、`agent_name`、`memory_scope`）同时放在顶层和 `arguments` 内
 - 阻断型 hook（`PreToolUse` / `UserPromptSubmit`）stdout、HTTP body 或 LLM prompt 返回支持最后一行或整个输出结构化 JSON：
   - `{"decision":"allow"}`：显式放行
@@ -368,8 +374,8 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
         "matcher": "plan",
         "url": "https://example.com/yucli/prompt-hook",
         "headers": {"X-YuCLI-Project": "demo"},
-        "authToken": "your-hook-token",
-        "signatureSecret": "your-hmac-secret",
+        "authToken": "${YUCLI_HOOK_TOKEN}",
+        "signatureSecret": "${YUCLI_HOOK_SIGNATURE_SECRET}",
         "retryCount": 2,
         "retryBackoffMillis": 250
       }
@@ -528,10 +534,11 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 - `/loop`：只读状态命令，展示 ReAct 循环的当前兜底规则。它基于 `AgentBudget` 暴露 Token 预算、重复工具调用停滞检测窗口、硬轮数上限；不调用 LLM、不执行工具、不改变会话状态
 - `/eval`：只读说明入口，展示 EvalHarness 的用途、用例格式和手动运行命令；不运行 harness、不调用真实 LLM
-- `/eval cases`：说明 `src/test/resources/eval/cases.json` 的 JSON array 格式，字段为 `id / instruction / setupScript / verifyScript`
+- `/eval cases`：说明 `src/test/resources/eval/cases.json` 的 JSON array 格式；核心字段为 `id / mode / instruction / setupScript* / verifyScript*`，其中 `mode` 可选 `react` / `plan` / `team` 且默认 `react`，脚本字段支持通用版和 Windows / Unix 平台覆盖
 - `/eval run`：只打印显式启用命令 `mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true` 和风险提示
 - `EvalHarness` 默认通过 `@EnabledIfSystemProperty(named = "YuCLI.eval.enabled", matches = "true")` 跳过，不能改成默认执行真实 LLM。涉及 eval harness 的改动至少保留一个测试确认默认门禁仍在
 - Eval case 的 `setupScript` / `verifyScript` 都在临时目录内执行，`verifyScript` 退出码 `0` 表示通过；新增用例时不要依赖真实用户目录、全局状态或不可回收的副作用
+- 当前内置 benchmark 用例覆盖 ReAct 文件读写、命令策略拒绝审计、Plan-and-Execute 文件转换、PreToolUse hook 拦截；Harness 会把 `YuCLI.audit.dir` 临时指向用例目录下的 `audit/`，并且只加载用例目录里的 `.YuCLI/hooks.json`，避免用户级 hook 污染结果
 
 ### 17. Headless Run
 
@@ -710,6 +717,7 @@ src/main/java/com/yucli
 - `BrowserToolProviderTest`
 - `TuiApplicationTest`
 - `EvalHarnessTest`
+- `ExampleConfigTest`
 
 这意味着当前自动化测试更偏解析、计划结构、RAG 核心模块、Multi-Agent 编排逻辑、HITL 审批策略、策略层拦截规则、MCP 协议核心组件和 MCP resources 输入层，不覆盖真实 LLM 联调、真实 Embedding API 联调、真实 npm/uvx MCP server 联调，也不覆盖终端交互的完整手工体验。
 

@@ -1,0 +1,6 @@
+{
+  "name": "planner",
+  "role": "PLANNER",
+  "instructions": "Break the request into the smallest useful DAG. Prefer independent steps when files can be inspected in parallel. Do not add write or command steps unless they are necessary.",
+  "tools": []
+}

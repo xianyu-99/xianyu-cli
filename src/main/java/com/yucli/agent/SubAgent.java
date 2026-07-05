@@ -38,6 +38,8 @@ public class SubAgent {
     private final ToolRegistry toolRegistry;
     private final String customInstructions;
     private final List<String> toolWhitelist;
+    private final List<String> deniedTools;
+    private final List<String> allowedCommands;
     private final List<LlmClient.Message> conversationHistory;
 
     // 各角色的系统提示词
@@ -140,19 +142,32 @@ public class SubAgent {
     public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
                     String customInstructions, List<String> toolWhitelist,
                     List<String> allowedPaths, List<String> deniedCommands, String workingDirectory) {
+        this(name, role, llmClient, toolRegistry, customInstructions, toolWhitelist,
+                allowedPaths, deniedCommands, workingDirectory, List.of(), List.of());
+    }
+
+    public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
+                    String customInstructions, List<String> toolWhitelist,
+                    List<String> allowedPaths, List<String> deniedCommands, String workingDirectory,
+                    List<String> deniedTools, List<String> allowedCommands) {
         this.name = name;
         this.role = role;
         this.llmClient = llmClient;
         this.customInstructions = customInstructions;
         this.toolWhitelist = sanitizeToolWhitelist(toolWhitelist);
+        this.deniedTools = sanitizeToolWhitelist(deniedTools);
+        this.allowedCommands = sanitizeToolWhitelist(allowedCommands);
         boolean scoped = !this.toolWhitelist.isEmpty()
+                || !this.deniedTools.isEmpty()
+                || !this.allowedCommands.isEmpty()
                 || (allowedPaths != null && !allowedPaths.isEmpty())
                 || (deniedCommands != null && !deniedCommands.isEmpty())
                 || (workingDirectory != null && !workingDirectory.isBlank());
         this.toolRegistry = !scoped
                 ? toolRegistry
                 : new ScopedToolRegistry(toolRegistry, this.toolWhitelist,
-                        allowedPaths, deniedCommands, workingDirectory);
+                        allowedPaths, deniedCommands, workingDirectory,
+                        this.deniedTools, this.allowedCommands);
         this.toolRegistry.getHookManager().setLlmClient(llmClient);
         this.conversationHistory = new ArrayList<>();
         this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));
@@ -161,7 +176,8 @@ public class SubAgent {
     public SubAgent(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
         this(profile.getName(), profile.getRole(), llmClient, toolRegistry,
                 profile.getInstructions(), profile.getTools(),
-                profile.getAllowedPaths(), profile.getDeniedCommands(), profile.getWorkingDirectory());
+                profile.getAllowedPaths(), profile.getDeniedCommands(), profile.getWorkingDirectory(),
+                profile.getDeniedTools(), profile.getAllowedCommands());
     }
 
     public static SubAgent fromProfile(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
@@ -188,6 +204,20 @@ public class SubAgent {
                     .append(String.join(", ", toolWhitelist))
                     .append("\nWhen this role can call tools, only call tools in this list. ")
                     .append("If a task requires another tool, explain that the profile does not allow it.");
+        }
+        if (!deniedTools.isEmpty() || !allowedCommands.isEmpty()) {
+            prompt.append("\n\n[Profile execution scope]\n");
+            if (!deniedTools.isEmpty()) {
+                prompt.append("Denied tools: ")
+                        .append(String.join(", ", deniedTools))
+                        .append('\n');
+            }
+            if (!allowedCommands.isEmpty()) {
+                prompt.append("Allowed commands: ")
+                        .append(String.join(", ", allowedCommands))
+                        .append('\n');
+            }
+            prompt.append("These limits are enforced by the runtime before the shared ToolRegistry.");
         }
         return prompt.toString();
     }

@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "write_file",
+        "command": "python examples/hooks/scripts/pre_write_guard.py",
+        "timeoutSeconds": 5
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "command": "python examples/hooks/scripts/prompt_guard.py",
+        "timeoutSeconds": 3
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "command": "python examples/hooks/scripts/audit_log.py",
+        "async": true,
+        "timeoutSeconds": 5
+      }
+    ]
+  }
+}

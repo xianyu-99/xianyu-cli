@@ -1,0 +1,9 @@
+{
+  "name": "worker-safe-editor",
+  "role": "WORKER",
+  "instructions": "Implement tightly scoped source and documentation edits. Prefer read_file, list_dir, and search_code before execute_command. Do not push, commit, or run destructive commands.",
+  "tools": ["read_file", "write_file", "list_dir", "search_code", "execute_command"],
+  "allowedPaths": ["src", "README.md", "AGENTS.md", "docs", "examples"],
+  "deniedCommands": ["git push", "git commit", "rm ", "del ", "Remove-Item", "curl*", "Invoke-WebRequest*", "powershell -EncodedCommand*"],
+  "workingDirectory": "."
+}

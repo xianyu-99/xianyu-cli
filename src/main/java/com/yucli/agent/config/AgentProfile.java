@@ -16,6 +16,8 @@ public class AgentProfile {
     private AgentRole role;
     private String instructions;
     private List<String> tools = new ArrayList<>();
+    private List<String> deniedTools = new ArrayList<>();
+    private List<String> allowedCommands = new ArrayList<>();
     private List<String> allowedPaths = new ArrayList<>();
     private List<String> deniedCommands = new ArrayList<>();
     private String workingDirectory;
@@ -53,6 +55,22 @@ public class AgentProfile {
 
     public void setTools(List<String> tools) {
         this.tools = tools == null ? new ArrayList<>() : new ArrayList<>(tools);
+    }
+
+    public List<String> getDeniedTools() {
+        return deniedTools;
+    }
+
+    public void setDeniedTools(List<String> deniedTools) {
+        this.deniedTools = deniedTools == null ? new ArrayList<>() : new ArrayList<>(deniedTools);
+    }
+
+    public List<String> getAllowedCommands() {
+        return allowedCommands;
+    }
+
+    public void setAllowedCommands(List<String> allowedCommands) {
+        this.allowedCommands = allowedCommands == null ? new ArrayList<>() : new ArrayList<>(allowedCommands);
     }
 
     public List<String> getAllowedPaths() {
@@ -112,6 +130,8 @@ public class AgentProfile {
                 throw new IllegalArgumentException("agent profile tools cannot contain blank values");
             }
         }
+        validateNoBlank("deniedTools", deniedTools);
+        validateNoBlank("allowedCommands", allowedCommands);
         validateNoBlank("allowedPaths", allowedPaths);
         validateNoBlank("deniedCommands", deniedCommands);
     }

@@ -3,7 +3,11 @@ package com.yucli.eval;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yucli.agent.Agent;
+import com.yucli.agent.AgentOrchestrator;
+import com.yucli.agent.PlanExecuteAgent;
 import com.yucli.config.YuCLIConfig;
+import com.yucli.hook.HookConfigLoader;
+import com.yucli.hook.HookManager;
 import com.yucli.llm.LlmClient;
 import com.yucli.llm.LlmClientFactory;
 import com.yucli.hitl.HitlHandler;
@@ -18,7 +22,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -49,12 +55,26 @@ public class EvalHarness {
             report.setId(testCase.getId());
             long startMs = System.currentTimeMillis();
 
-            Path tempDir = Files.createTempDirectory(Path.of("."), "yucli-eval-");
+            Path tempDir = Files.createTempDirectory(Path.of(".").toAbsolutePath().normalize(), "yucli-eval-");
+            String previousAuditDir = System.getProperty("YuCLI.audit.dir");
             try {
+                System.setProperty("YuCLI.audit.dir", tempDir.resolve("audit").toString());
+
                 // Setup
-                if (testCase.getSetupScript() != null && !testCase.getSetupScript().isEmpty()) {
-                    runScript(tempDir, testCase.getSetupScript());
+                String setupScript = selectScript(
+                        testCase.getSetupScript(),
+                        testCase.getSetupScriptWindows(),
+                        testCase.getSetupScriptUnix());
+                if (setupScript != null && !setupScript.isBlank()) {
+                    int setupExitCode = runScript(tempDir, setupScript);
+                    if (setupExitCode != 0) {
+                        throw new IllegalStateException("Setup script returned exit code " + setupExitCode);
+                    }
                 }
+
+                HookManager hookManager = new HookConfigLoader().load(
+                        tempDir,
+                        tempDir.resolve(".YuCLI").resolve("hooks.json"));
 
                 // Mock HITL Handler that always approves
                 HitlHandler mockHitl = new HitlHandler() {
@@ -71,16 +91,20 @@ public class EvalHarness {
                 };
 
                 // Run agent
-                HitlToolRegistry toolRegistry = new HitlToolRegistry(mockHitl);
+                HitlToolRegistry toolRegistry = new HitlToolRegistry(mockHitl, hookManager);
                 toolRegistry.setProjectPath(tempDir.toString());
 
-                Agent agent = new Agent(llmClient, toolRegistry);
-                String result = agent.run(testCase.getInstruction());
+                String result = runAgent(testCase, llmClient, toolRegistry);
+                Files.writeString(tempDir.resolve("agent-result.txt"), result == null ? "" : result);
                 System.out.println("Agent Result for " + testCase.getId() + ":\n" + result);
 
                 // Verify
-                if (testCase.getVerifyScript() != null && !testCase.getVerifyScript().isEmpty()) {
-                    int exitCode = runScript(tempDir, testCase.getVerifyScript());
+                String verifyScript = selectScript(
+                        testCase.getVerifyScript(),
+                        testCase.getVerifyScriptWindows(),
+                        testCase.getVerifyScriptUnix());
+                if (verifyScript != null && !verifyScript.isBlank()) {
+                    int exitCode = runScript(tempDir, verifyScript);
                     report.setSuccess(exitCode == 0);
                     if (exitCode != 0) {
                         report.setError("Verify script returned exit code " + exitCode);
@@ -99,10 +123,11 @@ public class EvalHarness {
                 System.out.println("Case " + testCase.getId() + " success: " + report.isSuccess());
                 try {
                     Files.walk(tempDir)
-                        .sorted(java.util.Comparator.reverseOrder())
+                        .sorted(Comparator.reverseOrder())
                         .map(Path::toFile)
                         .forEach(File::delete);
                 } catch (Exception ignore) {}
+                restoreSystemProperty("YuCLI.audit.dir", previousAuditDir);
             }
         }
 
@@ -112,12 +137,43 @@ public class EvalHarness {
         assertEquals(reports.size(), successCount, "Not all evaluation cases passed.");
     }
 
+    private String runAgent(EvalTestCase testCase, LlmClient llmClient, HitlToolRegistry toolRegistry) {
+        String mode = normalizeMode(testCase.getMode());
+        return switch (mode) {
+            case "plan" -> new PlanExecuteAgent(
+                    llmClient,
+                    toolRegistry,
+                    null,
+                    (goal, plan) -> PlanExecuteAgent.PlanReviewDecision.execute())
+                    .run(testCase.getInstruction());
+            case "team" -> new AgentOrchestrator(llmClient, toolRegistry).run(testCase.getInstruction());
+            case "react" -> new Agent(llmClient, toolRegistry).run(testCase.getInstruction());
+            default -> throw new IllegalArgumentException("Unsupported eval mode: " + mode);
+        };
+    }
+
+    private String normalizeMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return "react";
+        }
+        return mode.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String selectScript(String genericScript, String windowsScript, String unixScript) {
+        boolean isWindows = isWindows();
+        String platformScript = isWindows ? windowsScript : unixScript;
+        if (platformScript != null && !platformScript.isBlank()) {
+            return platformScript;
+        }
+        return genericScript;
+    }
+
     private int runScript(Path dir, String script) throws IOException, InterruptedException {
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
         if (isWindows) {
             Path scriptFile = dir.resolve("script.ps1");
             Files.writeString(scriptFile, script);
-            ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-File", scriptFile.toString());
+            ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-File", scriptFile.toAbsolutePath().toString());
             pb.directory(dir.toFile());
             pb.inheritIO();
             Process process = pb.start();
@@ -125,11 +181,23 @@ public class EvalHarness {
         } else {
             Path scriptFile = dir.resolve("script.sh");
             Files.writeString(scriptFile, script);
-            ProcessBuilder pb = new ProcessBuilder("bash", scriptFile.toString());
+            ProcessBuilder pb = new ProcessBuilder("bash", scriptFile.toAbsolutePath().toString());
             pb.directory(dir.toFile());
             pb.inheritIO();
             Process process = pb.start();
             return process.waitFor();
+        }
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private void restoreSystemProperty(String key, String previousValue) {
+        if (previousValue == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, previousValue);
         }
     }
 }

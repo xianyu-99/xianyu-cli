@@ -245,19 +245,27 @@ Eval case 顶层是 JSON array，每个对象字段如下：
 
 ```json
 {
-  "id": "file-write-1",
-  "instruction": "Create a file named hello.txt.",
-  "setupScript": "",
-  "verifyScript": "if (Test-Path 'hello.txt') { exit 0 } else { exit 1 }"
+  "id": "react-file-read-write",
+  "mode": "react",
+  "instruction": "Read input.txt, then create summary.txt.",
+  "setupScriptWindows": "Set-Content -Path 'input.txt' -Value 'hello'",
+  "setupScriptUnix": "printf 'hello\\n' > input.txt",
+  "verifyScriptWindows": "if (Test-Path 'summary.txt') { exit 0 } else { exit 1 }",
+  "verifyScriptUnix": "test -f summary.txt"
 }
 ```
 
 字段说明：
 
 - `id`：稳定用例 ID
+- `mode`：可选，`react` / `plan` / `team`，默认 `react`
 - `instruction`：发给 Agent 的任务
 - `setupScript`：可选，运行前在临时目录执行
-- `verifyScript`：可选，运行后在临时目录执行，退出码 `0` 表示通过
+- `setupScriptWindows` / `setupScriptUnix`：可选，按平台覆盖 `setupScript`
+- `verifyScript`：运行后在临时目录执行，退出码 `0` 表示通过
+- `verifyScriptWindows` / `verifyScriptUnix`：可选，按平台覆盖 `verifyScript`
+
+当前内置 benchmark 用例覆盖 ReAct 文件读写、命令策略拒绝审计、Plan-and-Execute 文件转换、PreToolUse hook 拦截。Harness 每个用例都在独立临时目录运行，并把 `YuCLI.audit.dir` 指向该目录下的 `audit/`，只加载临时目录里的 `.YuCLI/hooks.json`，避免依赖用户全局状态。
 
 默认 `mvn test` 不会运行真实 LLM 评测。需要手动评测时必须显式启用：
 
@@ -322,7 +330,7 @@ hook 执行器：
 - `url` / `urls`：HTTP POST JSON payload，2xx 视为成功
 - `prompt` / `prompts`：使用当前 LLM 做结构化 hook 决策，不传工具列表，避免 hook 内部递归 tool-call
 
-HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`retryBackoffMillis`：`authToken` 会补 `Authorization: Bearer ...`，`signatureSecret` 会生成 `X-YuCLI-Signature: sha256=...`，429/5xx/超时/网络错误按 `retryCount` 重试。hook 错误输出会对 token/key/password/secret/authorization 做脱敏。
+HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`retryBackoffMillis`：`authToken` 会补 `Authorization: Bearer ...`，`signatureSecret` 会生成 `X-YuCLI-Signature: sha256=...`，429/5xx/超时/网络错误按 `retryCount` 重试。HTTP hook 的 `url` / `urls`、`headers` 值、`authToken`、`signatureSecret` 支持 `${ENV_NAME}` 环境变量占位符；缺失变量会导致当前 hook 配置文件被忽略，stderr 只打印缺失变量名，不打印原始配置值。hook 错误输出会对 token/key/password/secret/authorization 做脱敏；`/hooks` 会展示 URL，secret 优先放在 header / `authToken` / `signatureSecret` 中。
 
 阻断型事件（`PreToolUse`、`UserPromptSubmit`）可返回 `{"decision":"allow|deny|modify","reason":"...","arguments":{...}}`；非阻断事件会忽略 `deny/modify`，只向 stderr 打印 warning。非阻断事件可设置 `"async": true` 后台执行，避免通知类 hook 阻塞主流程。`/hooks` 可查看当前 hook 状态、事件计数、matcher、command/http/prompt 数量、async 和 timeout。
 
@@ -339,8 +347,8 @@ HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`r
         "matcher": "plan",
         "url": "https://example.com/yucli/prompt-hook",
         "headers": {"X-YuCLI-Project": "demo"},
-        "authToken": "your-hook-token",
-        "signatureSecret": "your-hmac-secret",
+        "authToken": "${YUCLI_HOOK_TOKEN}",
+        "signatureSecret": "${YUCLI_HOOK_SIGNATURE_SECRET}",
         "retryCount": 2,
         "retryBackoffMillis": 250
       }
@@ -354,6 +362,8 @@ HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`r
 
 `matcher` 支持精确值、`*`、前缀通配。工具事件匹配工具名，如 `write_file` / `mcp__*`；`UserPromptSubmit` 和顶层 Agent 事件匹配 mode，如 `react` / `plan` / `team`；SubAgent 事件匹配角色，如 `planner` / `worker` / `reviewer`；`PreCompact` 匹配 `short_term`。
 
+官方 hook recipes 位于 `examples/hooks/`，默认不自动加载；复制 `examples/hooks/hooks.json` 到 `.YuCLI/hooks.json` 后生效。示例脚本只使用 Python 标准库，启用前应按项目需要审阅和调整规则。
+
 ### SubAgent Profiles
 
 YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / `/team <任务>` 的 Multi-Agent 编排器。
@@ -365,7 +375,9 @@ YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / 
 
 同名 profile 由项目级覆盖用户级。可用 `/agents` 查看当前加载结果。存在 `WORKER` profile 时，worker 池由这些 profile 决定；否则回退默认 `worker-1` / `worker-2`。
 
-`tools` 是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前被拒绝。为空时不限制。Profile 也可配置 `allowedPaths`、`deniedCommands`、`workingDirectory`，用于给单个 SubAgent 增加独立路径/命令 scope；这些限制同样由 `ScopedToolRegistry` 在运行时硬拦截。
+`tools` 是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前被拒绝。为空时不限制。Profile 也可配置 `deniedTools`、`allowedCommands`、`allowedPaths`、`deniedCommands`、`workingDirectory`，用于给单个 SubAgent 增加独立工具/命令/路径 scope；这些限制同样由 `ScopedToolRegistry` 在运行时硬拦截。`deniedTools` 会从工具定义和执行两侧生效；`allowedCommands` 为空时不限制，非空时 `execute_command` 只能执行匹配的命令，且 `deniedCommands` 优先。
+
+官方 profile 示例位于 `examples/agents/`，默认不自动加载；复制到 `.YuCLI/agents/` 或 `~/.YuCLI/agents/` 后生效。
 
 ```json
 {
@@ -373,6 +385,8 @@ YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / 
   "role": "REVIEWER",
   "instructions": "审查执行结果，指出风险和缺口。",
   "tools": ["read_file", "search_code"],
+  "deniedTools": ["write_file", "mcp__danger__*"],
+  "allowedCommands": ["git status", "mvn test*"],
   "allowedPaths": ["src", "README.md"],
   "deniedCommands": ["git push", "curl*"],
   "workingDirectory": "src",
