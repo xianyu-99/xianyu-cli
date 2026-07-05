@@ -35,13 +35,13 @@
 
 - Java 17+
 - Maven
-- 可用的默认模型 API Key：`ANTHROPIC_API_KEY`（默认 provider 为 `anthropic`，默认 DeepSeek Anthropic 兼容端点）
+- 可用的默认模型 API Key：`ANTHROPIC_API_KEY`（默认 provider 为 `anthropic`，默认 DeepSeek Anthropic 兼容端点）；也兼容 Claude Code 常用的 `ANTHROPIC_AUTH_TOKEN`
 - 可选模型 Key：`GLM_API_KEY`、`DEEPSEEK_API_KEY`、`QWEN_API_KEY`、`OPENAI_API_KEY`
 
 模型配置当前读取顺序以代码为准：
 
 1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl`
-2. 环境变量：`ANTHROPIC_API_KEY` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `OPENAI_API_KEY` 等
+2. 环境变量：`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `OPENAI_API_KEY` 等
 3. 仓库当前目录下的 `.env`
 4. 用户主目录下的 `.env`
 
@@ -49,6 +49,7 @@
 
 ```bash
 ANTHROPIC_API_KEY=your_api_key_here
+# ANTHROPIC_AUTH_TOKEN=your_api_key_here
 # ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 # ANTHROPIC_MODEL=deepseek-v4-pro
 # GLM_API_KEY=your_api_key_here

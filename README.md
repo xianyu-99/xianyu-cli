@@ -63,6 +63,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 # 方式二：环境变量
 export ANTHROPIC_API_KEY=your-key
+# Claude Code 兼容写法也可直接用于 YuCLI
+# export ANTHROPIC_BASE_URL=https://api-us.popcorn.wiki/
+# export ANTHROPIC_AUTH_TOKEN=your-key
+# export ANTHROPIC_MODEL=your-anthropic-compatible-model
 # QWEN_API_KEY=your-key
 # OPENAI_API_KEY=your-key
 ```

@@ -10,6 +10,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -116,24 +117,32 @@ public class YuCLIConfig {
     }
 
     private static String loadApiKeyFromEnv(String provider) {
-        String envKey = switch (provider.toLowerCase()) {
-            case "glm" -> "GLM_API_KEY";
-            case "deepseek" -> "DEEPSEEK_API_KEY";
-            case "anthropic" -> "ANTHROPIC_API_KEY";
-            default -> provider.toUpperCase() + "_API_KEY";
-        };
+        List<String> envKeys = apiKeyEnvKeys(provider);
 
-        String envValue = System.getenv(envKey);
-        if (envValue != null && !envValue.isBlank()) {
-            return envValue.trim();
+        for (String envKey : envKeys) {
+            String envValue = System.getenv(envKey);
+            if (envValue != null && !envValue.isBlank()) {
+                return envValue.trim();
+            }
         }
 
-        String dotEnvValue = readFromDotEnv(envKey);
-        if (dotEnvValue != null && !dotEnvValue.isBlank()) {
-            return dotEnvValue.trim();
+        for (String envKey : envKeys) {
+            String dotEnvValue = readFromDotEnv(envKey);
+            if (dotEnvValue != null && !dotEnvValue.isBlank()) {
+                return dotEnvValue.trim();
+            }
         }
 
         return null;
+    }
+
+    static List<String> apiKeyEnvKeys(String provider) {
+        return switch (provider.toLowerCase()) {
+            case "glm" -> List.of("GLM_API_KEY");
+            case "deepseek" -> List.of("DEEPSEEK_API_KEY");
+            case "anthropic" -> List.of("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN");
+            default -> List.of(provider.toUpperCase() + "_API_KEY");
+        };
     }
 
     private static String loadBaseUrlFromEnv(String provider) {

@@ -170,6 +170,15 @@ class YuCLIConfigTest {
     // ── Multiple providers ───────────────────────────────────────────
 
     @Test
+    @DisplayName("Anthropic provider accepts Claude Code ANTHROPIC_AUTH_TOKEN alias")
+    void anthropicApiKeyEnvKeys_includeAuthTokenAlias() {
+        assertEquals(
+                java.util.List.of("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+                YuCLIConfig.apiKeyEnvKeys("anthropic")
+        );
+    }
+
+    @Test
     @DisplayName("Multiple providers in map: both accessible independently")
     void multipleProviders() {
         YuCLIConfig config = new YuCLIConfig();
