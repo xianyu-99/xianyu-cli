@@ -1,5 +1,6 @@
 package com.yucli.agent;
 
+import com.yucli.agent.config.AgentProfile;
 import com.yucli.llm.GLMClient;
 import com.yucli.llm.LlmClient;
 import com.yucli.runtime.CancellationContext;
@@ -30,6 +31,29 @@ class SubAgentTest {
                 new GLMClient("test-key"), new ToolRegistry())));
         assertFalse(invokeShouldUseTools(new SubAgent("reviewer", AgentRole.REVIEWER,
                 new GLMClient("test-key"), new ToolRegistry())));
+    }
+
+    @Test
+    void shouldAppendProfileInstructionsAndToolWhitelistToSystemPrompt() {
+        AgentProfile profile = new AgentProfile();
+        profile.setName("repo-reader");
+        profile.setRole("worker");
+        profile.setInstructions("PROFILE_INSTRUCTION_MARKER");
+        profile.setTools(List.of("read_file", "search_code"));
+
+        CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
+        SubAgent worker = SubAgent.fromProfile(profile, llm, new ToolRegistry());
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        PrintStream ps = new PrintStream(baos, true, StandardCharsets.UTF_8);
+        AgentMessage result = worker.execute(AgentMessage.task("orchestrator", "inspect repo"), ps);
+
+        assertEquals("repo-reader", result.fromAgent());
+        assertTrue(llm.systemPrompt.contains("Profile custom instructions"));
+        assertTrue(llm.systemPrompt.contains("PROFILE_INSTRUCTION_MARKER"));
+        assertTrue(llm.systemPrompt.contains("Profile tool whitelist"));
+        assertTrue(llm.systemPrompt.contains("read_file"));
+        assertTrue(llm.systemPrompt.contains("search_code"));
     }
 
     @Test
@@ -165,6 +189,30 @@ class SubAgentTest {
         Method method = SubAgent.class.getDeclaredMethod("shouldUseTools");
         method.setAccessible(true);
         return (boolean) method.invoke(agent);
+    }
+
+    private static final class CapturingSystemPromptClient extends GLMClient {
+        private String systemPrompt = "";
+
+        private CapturingSystemPromptClient() {
+            super("test-key");
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
+            return chat(messages, tools, StreamListener.NO_OP);
+        }
+
+        @Override
+        public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) {
+            systemPrompt = messages.stream()
+                    .filter(message -> "system".equals(message.role()))
+                    .findFirst()
+                    .map(Message::content)
+                    .orElse("");
+            listener.onContentDelta("done");
+            return new ChatResponse("assistant", "done", null, null, 10, 5);
+        }
     }
 
     /**

@@ -8,7 +8,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class HookManager {
@@ -42,6 +44,28 @@ public class HookManager {
         return hooks.values().stream().anyMatch(list -> !list.isEmpty());
     }
 
+    public HookStatus status() {
+        Map<String, Integer> hookCounts = new LinkedHashMap<>();
+        List<HookSummary> summaries = new ArrayList<>();
+        for (HookEvent event : HookEvent.values()) {
+            List<HookDefinition> definitions = hooks.getOrDefault(event, List.of());
+            hookCounts.put(event.configName(), definitions.size());
+            for (HookDefinition definition : definitions) {
+                if (definition == null) {
+                    continue;
+                }
+                summaries.add(new HookSummary(
+                        event.configName(),
+                        definition.getMatcher() == null || definition.getMatcher().isBlank()
+                                ? "*"
+                                : definition.getMatcher().trim(),
+                        definition.normalizedCommands(),
+                        normalizeTimeout(definition.getTimeoutSeconds())));
+            }
+        }
+        return new HookStatus(hasHooks(), projectPath.toString(), summaries.size(), hookCounts, summaries);
+    }
+
     public void setProjectPath(Path projectPath) {
         this.projectPath = normalizeProjectPath(projectPath);
     }
@@ -69,6 +93,7 @@ public class HookManager {
     }
 
     private HookDecision runBlockingHooks(HookEvent event, String toolName, ObjectNode payload) {
+        HookDecision finalDecision = HookDecision.allow();
         for (HookDefinition definition : matchingHooks(event, toolName)) {
             for (String command : definition.normalizedCommands()) {
                 HookCommandExecutor.HookCommandResult result = executor.execute(
@@ -79,9 +104,17 @@ public class HookManager {
                 if (!result.success()) {
                     return HookDecision.block(result.failureMessage());
                 }
+                HookDecision outputDecision = parseStructuredDecision(result.output());
+                if (!outputDecision.allowed()) {
+                    return outputDecision;
+                }
+                if (outputDecision.modified()) {
+                    updateArguments(payload, outputDecision.arguments());
+                    finalDecision = outputDecision;
+                }
             }
         }
-        return HookDecision.allow();
+        return finalDecision;
     }
 
     private void runDefinition(HookDefinition definition, ObjectNode payload) {
@@ -145,6 +178,78 @@ public class HookManager {
         }
     }
 
+    private HookDecision parseStructuredDecision(String output) {
+        JsonNode decisionNode = findStructuredDecision(output);
+        if (decisionNode == null || !decisionNode.has("decision")) {
+            return HookDecision.allow();
+        }
+
+        String decision = decisionNode.path("decision").asText("").trim().toLowerCase(Locale.ROOT);
+        String reason = textOrNull(decisionNode.get("reason"));
+        return switch (decision) {
+            case "allow" -> HookDecision.allow();
+            case "deny" -> HookDecision.block(reason);
+            case "modify" -> {
+                JsonNode arguments = decisionNode.get("arguments");
+                if (arguments == null || !arguments.isObject()) {
+                    yield HookDecision.block("hook modify decision requires object arguments");
+                }
+                yield HookDecision.modify(arguments.deepCopy(), reason);
+            }
+            default -> HookDecision.block("unsupported hook decision: " + decision);
+        };
+    }
+
+    private JsonNode findStructuredDecision(String output) {
+        if (output == null || output.isBlank()) {
+            return null;
+        }
+        String trimmed = output.trim();
+        JsonNode direct = parseObjectNode(trimmed);
+        if (direct != null) {
+            return direct;
+        }
+
+        String[] lines = trimmed.split("\\R");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            JsonNode fromLine = parseObjectNode(lines[i].trim());
+            if (fromLine != null) {
+                return fromLine;
+            }
+        }
+        return null;
+    }
+
+    private JsonNode parseObjectNode(String value) {
+        if (value == null || value.isBlank() || !value.startsWith("{") || !value.endsWith("}")) {
+            return null;
+        }
+        try {
+            JsonNode node = MAPPER.readTree(value);
+            return node != null && node.isObject() ? node : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void updateArguments(ObjectNode payload, JsonNode arguments) {
+        JsonNode copy = arguments.deepCopy();
+        payload.set("arguments", copy);
+        try {
+            payload.put("arguments_raw", MAPPER.writeValueAsString(copy));
+        } catch (Exception e) {
+            payload.put("arguments_raw", "{}");
+        }
+    }
+
+    private static String textOrNull(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        String value = node.asText();
+        return value == null || value.isBlank() ? null : value;
+    }
+
     private static int normalizeTimeout(Integer timeoutSeconds) {
         if (timeoutSeconds == null || timeoutSeconds <= 0) {
             return DEFAULT_TIMEOUT_SECONDS;
@@ -168,5 +273,20 @@ public class HookManager {
     private static Path normalizeProjectPath(Path projectPath) {
         Path path = projectPath == null ? Path.of(System.getProperty("user.dir")) : projectPath;
         return path.toAbsolutePath().normalize();
+    }
+
+    public record HookStatus(boolean enabled, String projectPath, int totalHooks,
+                             Map<String, Integer> hookCounts, List<HookSummary> hooks) {
+        public HookStatus {
+            hookCounts = hookCounts == null ? Map.of() : Map.copyOf(hookCounts);
+            hooks = hooks == null ? List.of() : List.copyOf(hooks);
+        }
+    }
+
+    public record HookSummary(String event, String matcher, List<String> commands, int timeoutSeconds) {
+        public HookSummary {
+            matcher = matcher == null || matcher.isBlank() ? "*" : matcher;
+            commands = commands == null ? List.of() : List.copyOf(commands);
+        }
     }
 }

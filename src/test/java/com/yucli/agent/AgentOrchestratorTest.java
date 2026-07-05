@@ -3,6 +3,7 @@ package com.yucli.agent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.yucli.agent.config.AgentProfileLoader;
 import com.yucli.llm.GLMClient;
 import com.yucli.llm.LlmClient;
 import com.yucli.memory.LongTermMemory;
@@ -13,14 +14,17 @@ import com.yucli.tool.ToolRegistry;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -341,6 +345,126 @@ class AgentOrchestratorTest {
         assertEquals(2, peakConcurrency.get(), "Expected two workers to run concurrently");
     }
 
+    @Test
+    void shouldBuildTeamFromLoadedUserAndProjectProfiles(@TempDir Path tempDir) throws Exception {
+        Path userAgents = tempDir.resolve("user-agents");
+        Path projectAgents = tempDir.resolve("project-agents");
+        Files.createDirectories(userAgents);
+        Files.createDirectories(projectAgents);
+
+        Files.writeString(userAgents.resolve("planner.json"), """
+                {
+                  "name": "planner",
+                  "role": "PLANNER",
+                  "instructions": "USER_PLANNER_MARKER"
+                }
+                """);
+        Files.writeString(projectAgents.resolve("planner.json"), """
+                {
+                  "name": "planner",
+                  "role": "PLANNER",
+                  "instructions": "PROJECT_PLANNER_MARKER"
+                }
+                """);
+        Files.writeString(userAgents.resolve("worker-a.json"), """
+                {
+                  "name": "user-worker-a",
+                  "role": "WORKER",
+                  "instructions": "USER_WORKER_A_MARKER",
+                  "tools": ["read_file"]
+                }
+                """);
+        Files.writeString(userAgents.resolve("worker-b.json"), """
+                {
+                  "name": "user-worker-b",
+                  "role": "WORKER",
+                  "instructions": "USER_WORKER_B_MARKER",
+                  "tools": ["search_code"]
+                }
+                """);
+        Files.writeString(projectAgents.resolve("worker-c.json"), """
+                {
+                  "name": "project-worker-c",
+                  "role": "WORKER",
+                  "instructions": "PROJECT_WORKER_C_MARKER",
+                  "tools": ["list_dir"]
+                }
+                """);
+        Files.writeString(projectAgents.resolve("reviewer.json"), """
+                {
+                  "name": "strict-reviewer",
+                  "role": "REVIEWER",
+                  "instructions": "PROJECT_REVIEWER_MARKER"
+                }
+                """);
+
+        CountDownLatch workersInFlight = new CountDownLatch(3);
+        AtomicInteger peakConcurrency = new AtomicInteger();
+        AtomicInteger currentConcurrency = new AtomicInteger();
+        List<String> systemPrompts = Collections.synchronizedList(new ArrayList<>());
+
+        Function<String, LlmClient.ChatResponse> dispatcher = body -> {
+            if (body.contains("profiled team")) {
+                return response("""
+                        {
+                          "summary": "profiled team",
+                          "steps": [
+                            {"id": "a", "description": "task A", "type": "ANALYSIS", "dependencies": []},
+                            {"id": "b", "description": "task B", "type": "ANALYSIS", "dependencies": []},
+                            {"id": "c", "description": "task C", "type": "ANALYSIS", "dependencies": []}
+                          ]
+                        }
+                        """);
+            }
+            if (body.contains("result A") || body.contains("result B") || body.contains("result C")) {
+                return response("""
+                        {"approved": true, "summary": "ok", "issues": []}
+                        """);
+            }
+            if (body.contains("task A")) {
+                return awaitBarrierThenReturn(workersInFlight, currentConcurrency, peakConcurrency,
+                        response("result A"));
+            }
+            if (body.contains("task B")) {
+                return awaitBarrierThenReturn(workersInFlight, currentConcurrency, peakConcurrency,
+                        response("result B"));
+            }
+            if (body.contains("task C")) {
+                return awaitBarrierThenReturn(workersInFlight, currentConcurrency, peakConcurrency,
+                        response("result C"));
+            }
+            return null;
+        };
+
+        DispatchingStubGLMClient llmClient = new DispatchingStubGLMClient(dispatcher, messages -> {
+            String systemPrompt = messages.stream()
+                    .filter(message -> "system".equals(message.role()))
+                    .findFirst()
+                    .map(LlmClient.Message::content)
+                    .orElse("");
+            systemPrompts.add(systemPrompt);
+        });
+        AgentOrchestrator orchestrator = new AgentOrchestrator(
+                llmClient,
+                new ToolRegistry(),
+                new NoOpMemoryManager(tempDir.toFile()),
+                new AgentProfileLoader(userAgents, projectAgents).load()
+        );
+
+        String finalResult = orchestrator.run("profiled team");
+
+        assertTrue(finalResult.contains("result A"));
+        assertTrue(finalResult.contains("result B"));
+        assertTrue(finalResult.contains("result C"));
+        assertEquals(3, peakConcurrency.get(), "Profile worker count should control batch parallelism");
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("PROJECT_PLANNER_MARKER")));
+        assertFalse(systemPrompts.stream().anyMatch(prompt -> prompt.contains("USER_PLANNER_MARKER")));
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("USER_WORKER_A_MARKER")));
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("USER_WORKER_B_MARKER")));
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("PROJECT_WORKER_C_MARKER")));
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("PROJECT_REVIEWER_MARKER")));
+    }
+
     private static LlmClient.ChatResponse awaitBarrierThenReturn(CountDownLatch latch,
                                                                   AtomicInteger current,
                                                                   AtomicInteger peak,
@@ -517,10 +641,18 @@ class AgentOrchestratorTest {
      */
     private static final class DispatchingStubGLMClient extends GLMClient {
         private final Function<String, ChatResponse> dispatcher;
+        private final Consumer<List<Message>> callObserver;
 
         private DispatchingStubGLMClient(Function<String, ChatResponse> dispatcher) {
+            this(dispatcher, messages -> {
+            });
+        }
+
+        private DispatchingStubGLMClient(Function<String, ChatResponse> dispatcher,
+                                         Consumer<List<Message>> callObserver) {
             super("test-key");
             this.dispatcher = dispatcher;
+            this.callObserver = callObserver;
         }
 
         @Override
@@ -530,6 +662,7 @@ class AgentOrchestratorTest {
 
         @Override
         public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) throws IOException {
+            callObserver.accept(messages);
             String lastUserMessage = findLastUser(messages);
             ChatResponse response = dispatcher.apply(lastUserMessage);
             if (response == null) {

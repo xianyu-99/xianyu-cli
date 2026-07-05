@@ -246,4 +246,11 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agents list").type());
         assertEquals(CliCommandParser.CommandType.AGENT_LIST, CliCommandParser.parse("/agent list").type());
     }
+
+    @Test
+    void parsesHookStatusCommands() {
+        assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hooks").type());
+        assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hooks list").type());
+        assertEquals(CliCommandParser.CommandType.HOOK_STATUS, CliCommandParser.parse("/hook list").type());
+    }
 }

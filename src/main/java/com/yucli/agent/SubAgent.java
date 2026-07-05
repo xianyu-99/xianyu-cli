@@ -2,6 +2,7 @@ package com.yucli.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yucli.agent.config.AgentProfile;
 import com.yucli.llm.LlmClient;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.tool.ToolRegistry;
@@ -33,6 +34,8 @@ public class SubAgent {
     private final AgentRole role;
     private final LlmClient llmClient;
     private final ToolRegistry toolRegistry;
+    private final String customInstructions;
+    private final List<String> toolWhitelist;
     private final List<LlmClient.Message> conversationHistory;
 
     // 各角色的系统提示词
@@ -123,23 +126,63 @@ public class SubAgent {
             """;
 
     public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry) {
+        this(name, role, llmClient, toolRegistry, null, List.of());
+    }
+
+    public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
+                    String customInstructions, List<String> toolWhitelist) {
         this.name = name;
         this.role = role;
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
+        this.customInstructions = customInstructions;
+        this.toolWhitelist = sanitizeToolWhitelist(toolWhitelist);
         this.conversationHistory = new ArrayList<>();
         this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));
+    }
+
+    public SubAgent(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
+        this(profile.getName(), profile.getRole(), llmClient, toolRegistry,
+                profile.getInstructions(), profile.getTools());
+    }
+
+    public static SubAgent fromProfile(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
+        return new SubAgent(profile, llmClient, toolRegistry);
     }
 
     /**
      * 根据角色获取系统提示词
      */
     private String getSystemPrompt() {
-        return switch (role) {
+        String basePrompt = switch (role) {
             case PLANNER -> PLANNER_PROMPT;
             case WORKER -> WORKER_PROMPT;
             case REVIEWER -> REVIEWER_PROMPT;
         };
+        StringBuilder prompt = new StringBuilder(basePrompt);
+        if (customInstructions != null && !customInstructions.isBlank()) {
+            prompt.append("\n\n[Profile custom instructions]\n")
+                    .append(customInstructions.trim());
+        }
+        if (!toolWhitelist.isEmpty()) {
+            prompt.append("\n\n[Profile tool whitelist]\n")
+                    .append("Configured allowed tools: ")
+                    .append(String.join(", ", toolWhitelist))
+                    .append("\nWhen this role can call tools, only call tools in this list. ")
+                    .append("If a task requires another tool, explain that the profile does not allow it.");
+        }
+        return prompt.toString();
+    }
+
+    private static List<String> sanitizeToolWhitelist(List<String> tools) {
+        if (tools == null || tools.isEmpty()) {
+            return List.of();
+        }
+        return tools.stream()
+                .filter(tool -> tool != null && !tool.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
     }
 
     /**

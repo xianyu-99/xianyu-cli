@@ -57,6 +57,10 @@ export ANTHROPIC_API_KEY=your-key
 java -jar target/yucli-19.0.0.jar
 # 或全局安装后直接：
 yucli
+
+# Headless / CI:
+java -jar target/yucli-19.0.0.jar run "summarize this repo" --json
+java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --jsonl
 ```
 
 ## 核心功能
@@ -116,6 +120,7 @@ yucli
 | `/loop` | 查看 ReAct 循环保险阀状态 |
 | `/eval [cases\|run]` | 查看 EvalHarness 用例格式或手动运行说明，不默认调用真实 LLM |
 | `/agents` | 查看用户级和项目级 SubAgent Profile 配置 |
+| `/hooks` | 查看 `PreToolUse` / `PostToolUse` Hooks 状态 |
 | `/plan [任务]` | Plan-and-Execute 模式 |
 | `/team [任务]` | Multi-Agent 协作模式 |
 | `/model <name>` | 切换模型（deepseek/glm/anthropic） |
@@ -256,6 +261,17 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
 
 这会调用真实 LLM、执行本地 setup/verify 脚本，并消耗 API 配额。
 
+## Headless Run
+
+适合 CI / scripts / GitHub Actions 包装：
+
+```bash
+yucli run "summarize this repo" --json
+yucli run "review recent changes" --mode team --jsonl
+```
+
+输出字段：`task / mode / success / result / error / durationMs`。支持 `react`、`plan`、`team` 三种 mode；`plan` 会自动执行计划，`team` 会加载 SubAgent Profiles。
+
 ## Hooks / SubAgent Profiles
 
 ### Hooks
@@ -267,8 +283,10 @@ YuCLI 支持可配置工具生命周期 hook。默认读取：
 
 当前事件：
 
-- `PreToolUse`：工具执行前触发；hook 命令非 0、超时或执行失败会阻断本次工具调用
+- `PreToolUse`：工具执行前触发；hook 命令非 0、超时、执行失败或结构化 `deny` 会阻断本次工具调用
 - `PostToolUse`：工具执行后触发；失败只打印警告，不改变工具结果
+- `PreToolUse` stdout 可返回 `{"decision":"allow|deny|modify","reason":"...","arguments":{...}}`；`modify` 会替换后续工具调用参数
+- `/hooks` 可查看当前 hook 状态、事件计数、matcher、命令数量和 timeout
 
 配置示例：
 
@@ -289,14 +307,14 @@ YuCLI 支持可配置工具生命周期 hook。默认读取：
 
 ### SubAgent Profiles
 
-YuCLI 已支持加载自定义 SubAgent Profile 配置。当前是配置/展示层，尚未替换 Multi-Agent 编排器的固定 Planner / Worker / Reviewer。
+YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / `/team <任务>` 的 Multi-Agent 编排器。
 
 默认读取：
 
 1. `~/.YuCLI/agents/*.json`
 2. `.YuCLI/agents/*.json`
 
-同名 profile 由项目级覆盖用户级。可用 `/agents` 查看当前加载结果。
+同名 profile 由项目级覆盖用户级。可用 `/agents` 查看当前加载结果。存在 `WORKER` profile 时，worker 池由这些 profile 决定；否则回退默认 `worker-1` / `worker-2`。
 
 ```json
 {

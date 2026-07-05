@@ -12,6 +12,7 @@ final class CliCommandParser {
         LOOP_STATUS,
         EVAL_INFO,
         AGENT_LIST,
+        HOOK_STATUS,
         SWITCH_PLAN,
         SWITCH_TEAM,
         SWITCH_HITL,
@@ -109,6 +110,11 @@ final class CliCommandParser {
         if (trimmed.equalsIgnoreCase("/agents") || trimmed.equalsIgnoreCase("/agents list")
                 || trimmed.equalsIgnoreCase("/agent list")) {
             return new ParsedCommand(CommandType.AGENT_LIST, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/hooks") || trimmed.equalsIgnoreCase("/hooks list")
+                || trimmed.equalsIgnoreCase("/hook list")) {
+            return new ParsedCommand(CommandType.HOOK_STATUS, null);
         }
 
         if (trimmed.equalsIgnoreCase("/plan")) {

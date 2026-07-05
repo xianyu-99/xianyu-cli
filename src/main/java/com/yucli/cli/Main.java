@@ -28,6 +28,11 @@ import com.yucli.plugin.PluginManager;
 import com.yucli.plugin.PluginState;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.runtime.CancellationToken;
+import com.yucli.runtime.headless.HeadlessRunMode;
+import com.yucli.runtime.headless.HeadlessRunRequest;
+import com.yucli.runtime.headless.HeadlessRunResult;
+import com.yucli.runtime.headless.HeadlessRunner;
+import com.yucli.runtime.headless.JsonlEventWriter;
 import com.yucli.session.Session;
 import com.yucli.session.SessionManager;
 import com.yucli.tui.TuiApplication;
@@ -44,9 +49,12 @@ import org.jline.reader.UserInterruptException;
 import org.jline.utils.NonBlockingReader;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -131,6 +139,14 @@ public class Main {
     }
 
     public static void main(String[] args) {
+        if (isHeadlessRun(args)) {
+            int exitCode = runHeadless(args);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
+
         printBanner();
         configureLogging();
 
@@ -147,9 +163,10 @@ public class Main {
         try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
             TerminalHitlHandler hitlHandler = new TerminalHitlHandler(false);
             Path projectDir = Path.of(".").toAbsolutePath().normalize();
+            HookManager hookManager = HookManager.loadDefault(projectDir);
             HitlToolRegistry hitlToolRegistry = new HitlToolRegistry(
                     hitlHandler,
-                    HookManager.loadDefault(projectDir));
+                    hookManager);
             McpServerManager mcpServerManager = new McpServerManager(hitlToolRegistry, Path.of("."));
             mcpServerManager.setLlmClient(llmClient);
             try {
@@ -239,7 +256,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /loop /eval /agents /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
+                        System.out.println("可用命令：/model /loop /eval /agents /hooks /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
                         continue;
                     }
                     case TUI_LAUNCH -> {
@@ -284,6 +301,10 @@ public class Main {
                     }
                     case AGENT_LIST -> {
                         printAgentProfiles(projectDir);
+                        continue;
+                    }
+                    case HOOK_STATUS -> {
+                        printHookStatus(hookManager.status());
                         continue;
                     }
                     case SKILL_LIST -> {
@@ -700,7 +721,7 @@ public class Main {
                 } else if (nextTaskUseTeamMode || command.type() == CliCommandParser.CommandType.SWITCH_TEAM) {
                     LlmClient activeClient = llmClient;
                     runTask = () -> {
-                        AgentOrchestrator orchestrator = createTeamAgent(activeClient, reactAgent);
+                        AgentOrchestrator orchestrator = createTeamAgent(activeClient, reactAgent, projectDir);
                         return orchestrator.run(taskInput);
                     };
                 } else {
@@ -739,9 +760,167 @@ public class Main {
         return createPlanAgent(llmClient, reactAgent, createPlanReviewHandler(terminal, lineReader));
     }
 
-    private static AgentOrchestrator createTeamAgent(LlmClient llmClient, Agent reactAgent) {
+    private static AgentOrchestrator createTeamAgent(LlmClient llmClient, Agent reactAgent, Path projectDir) {
         System.out.println("👥 使用 Multi-Agent 协作模式\n");
+        try {
+            return AgentOrchestrator.fromProfileLoader(
+                    llmClient,
+                    reactAgent.getToolRegistry(),
+                    reactAgent.getMemoryManager(),
+                    new AgentProfileLoader(projectDir)
+            );
+        } catch (IOException e) {
+            System.out.println("Warning: failed to load SubAgent profiles; using default team: " + e.getMessage() + "\n");
+        }
         return new AgentOrchestrator(llmClient, reactAgent.getToolRegistry(), reactAgent.getMemoryManager());
+    }
+
+    private record HeadlessCliOptions(String task, String mode, boolean jsonl) {
+    }
+
+    private static boolean isHeadlessRun(String[] args) {
+        return args != null && args.length > 0 && "run".equalsIgnoreCase(args[0]);
+    }
+
+    private static int runHeadless(String[] args) {
+        HeadlessCliOptions options;
+        try {
+            options = parseHeadlessOptions(args);
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            printHeadlessUsage();
+            return 2;
+        }
+
+        configureLogging();
+        YuCLIConfig config = YuCLIConfig.load();
+        LlmClient llmClient = LlmClientFactory.createFromConfig(config);
+        if (llmClient == null) {
+            HeadlessRunResult result = HeadlessRunResult.failure(
+                    options.task(), options.mode(), new IllegalStateException("No available API key"), 0);
+            writeHeadlessResult(result, options.jsonl());
+            return 1;
+        }
+
+        Path projectDir = Path.of(".").toAbsolutePath().normalize();
+        HookManager hookManager = HookManager.loadDefault(projectDir);
+        HitlToolRegistry toolRegistry = new HitlToolRegistry(new TerminalHitlHandler(false), hookManager);
+        toolRegistry.setProjectPath(projectDir.toString());
+        Agent reactAgent = new Agent(llmClient, toolRegistry);
+
+        HeadlessRunner runner = new HeadlessRunner((task, mode) -> switch (mode) {
+            case REACT -> reactAgent.run(task);
+            case PLAN -> new PlanExecuteAgent(
+                    llmClient,
+                    reactAgent.getToolRegistry(),
+                    reactAgent.getMemoryManager(),
+                    (goal, plan) -> PlanExecuteAgent.PlanReviewDecision.execute()
+            ).run(task);
+            case TEAM -> {
+                try {
+                    yield AgentOrchestrator.fromProfileLoader(
+                            llmClient,
+                            reactAgent.getToolRegistry(),
+                            reactAgent.getMemoryManager(),
+                            new AgentProfileLoader(projectDir)
+                    ).run(task);
+                } catch (IOException e) {
+                    yield new AgentOrchestrator(
+                            llmClient,
+                            reactAgent.getToolRegistry(),
+                            reactAgent.getMemoryManager()
+                    ).run(task);
+                }
+            }
+        });
+
+        HeadlessRunResult result = runHeadlessQuietly(runner, options);
+        writeHeadlessResult(result, options.jsonl());
+        return result.success() ? 0 : 1;
+    }
+
+    private static HeadlessCliOptions parseHeadlessOptions(String[] args) {
+        String mode = HeadlessRunMode.REACT.value();
+        boolean jsonl = false;
+        StringBuilder task = new StringBuilder();
+
+        for (int i = 1; i < args.length; i++) {
+            String arg = args[i];
+            if ("--help".equalsIgnoreCase(arg) || "-h".equalsIgnoreCase(arg)) {
+                throw new IllegalArgumentException("Headless run usage");
+            }
+            if ("--jsonl".equalsIgnoreCase(arg)) {
+                jsonl = true;
+                continue;
+            }
+            if ("--json".equalsIgnoreCase(arg)) {
+                jsonl = false;
+                continue;
+            }
+            if ("--mode".equalsIgnoreCase(arg)) {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("--mode requires a value: react, plan, or team");
+                }
+                mode = args[++i];
+                continue;
+            }
+            if (arg.startsWith("--mode=")) {
+                mode = arg.substring("--mode=".length());
+                continue;
+            }
+            if ("--".equals(arg)) {
+                for (int j = i + 1; j < args.length; j++) {
+                    appendTaskToken(task, args[j]);
+                }
+                break;
+            }
+            appendTaskToken(task, arg);
+        }
+
+        String taskText = task.toString().trim();
+        if (taskText.isEmpty()) {
+            throw new IllegalArgumentException("Headless task must not be blank");
+        }
+        return new HeadlessCliOptions(taskText, mode, jsonl);
+    }
+
+    private static void appendTaskToken(StringBuilder task, String token) {
+        if (task.length() > 0) {
+            task.append(' ');
+        }
+        task.append(token);
+    }
+
+    private static HeadlessRunResult runHeadlessQuietly(HeadlessRunner runner, HeadlessCliOptions options) {
+        PrintStream originalOut = System.out;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        HeadlessRunResult result;
+        try (PrintStream silentOut = new PrintStream(captured, true, StandardCharsets.UTF_8)) {
+            System.setOut(silentOut);
+            result = runner.run(options.task(), options.mode());
+        } finally {
+            System.setOut(originalOut);
+        }
+
+        String transcript = captured.toString(StandardCharsets.UTF_8).trim();
+        if (result.success() && result.result().isBlank() && !transcript.isBlank()) {
+            return new HeadlessRunResult(
+                    result.task(), result.mode(), true, transcript, result.error(), result.durationMs());
+        }
+        return result;
+    }
+
+    private static void writeHeadlessResult(HeadlessRunResult result, boolean jsonl) {
+        try {
+            String json = JsonlEventWriter.toJson(result);
+            System.out.println(json);
+        } catch (IOException e) {
+            System.err.println("Failed to serialize headless result: " + e.getMessage());
+        }
+    }
+
+    private static void printHeadlessUsage() {
+        System.err.println("Usage: yucli run <task> [--mode react|plan|team] [--json|--jsonl]");
     }
 
     private static String runWithCancelSupport(Terminal terminal, Callable<String> task) {
@@ -1094,6 +1273,7 @@ public class Main {
                 "输入 '/loop' 查看 ReAct 循环保底预算与停滞检测规则",
                 "输入 '/eval' 查看手动 EvalHarness 用例格式与启用命令（默认不运行真实 LLM）",
                 "输入 '/agents' 查看用户级和项目级 SubAgent Profile 配置",
+                "输入 '/hooks' 查看 PreToolUse / PostToolUse Hook 配置状态",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
                 "输入 '/plugin' 查看插件，'/plugin enable|disable <name>' 启用/禁用插件，'/plugin reload' 重新加载",
@@ -1181,6 +1361,25 @@ public class Main {
             System.out.println("❌ 读取 SubAgent Profile 失败: " + e.getMessage());
             System.out.println();
         }
+    }
+
+    private static void printHookStatus(HookManager.HookStatus status) {
+        System.out.println("Hooks:");
+        System.out.println("   enabled: " + status.enabled());
+        System.out.println("   project: " + status.projectPath());
+        System.out.println("   total: " + status.totalHooks());
+        status.hookCounts().forEach((event, count) ->
+                System.out.println("   " + event + ": " + count));
+        if (!status.hooks().isEmpty()) {
+            System.out.println("   definitions:");
+            for (HookManager.HookSummary hook : status.hooks()) {
+                System.out.println("     - " + hook.event()
+                        + " matcher=" + hook.matcher()
+                        + " commands=" + hook.commands().size()
+                        + " timeout=" + hook.timeoutSeconds() + "s");
+            }
+        }
+        System.out.println();
     }
 
     private static void printPolicyStatus(Agent reactAgent) {

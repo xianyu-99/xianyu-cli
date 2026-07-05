@@ -2,6 +2,8 @@ package com.yucli.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yucli.agent.config.AgentProfile;
+import com.yucli.agent.config.AgentProfileLoader;
 import com.yucli.llm.LlmClient;
 import com.yucli.memory.MemoryManager;
 import com.yucli.runtime.CancellationContext;
@@ -11,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -47,6 +50,7 @@ public class AgentOrchestrator {
     private final SubAgent planner;
     private final List<SubAgent> workers;
     private final SubAgent reviewer;
+    private final AgentProfile reviewerProfile;
     private final MemoryManager memoryManager;
     private final ToolRegistry toolRegistry;
 
@@ -75,6 +79,10 @@ public class AgentOrchestrator {
         PENDING, RUNNING, COMPLETED, FAILED
     }
 
+    private record TeamAgents(SubAgent planner, List<SubAgent> workers,
+                              SubAgent reviewer, AgentProfile reviewerProfile) {
+    }
+
     public AgentOrchestrator(LlmClient llmClient) {
         this(llmClient, new ToolRegistry(), new MemoryManager(llmClient));
     }
@@ -84,15 +92,84 @@ public class AgentOrchestrator {
     }
 
     public AgentOrchestrator(LlmClient llmClient, ToolRegistry toolRegistry, MemoryManager memoryManager) {
-        this.llmClient = llmClient;
-        this.toolRegistry = toolRegistry;
-        this.planner = new SubAgent("planner", AgentRole.PLANNER, llmClient, toolRegistry);
-        this.workers = List.of(
-                new SubAgent("worker-1", AgentRole.WORKER, llmClient, toolRegistry),
-                new SubAgent("worker-2", AgentRole.WORKER, llmClient, toolRegistry)
-        );
-        this.reviewer = new SubAgent("reviewer", AgentRole.REVIEWER, llmClient, toolRegistry);
-        this.memoryManager = memoryManager;
+        this(llmClient, toolRegistry, memoryManager, List.of());
+    }
+
+    public AgentOrchestrator(LlmClient llmClient, ToolRegistry toolRegistry, MemoryManager memoryManager,
+                             Map<String, AgentProfile> profiles) {
+        this(llmClient, toolRegistry, memoryManager, profiles == null ? List.of() : profiles.values());
+    }
+
+    public AgentOrchestrator(LlmClient llmClient, ToolRegistry toolRegistry, MemoryManager memoryManager,
+                             Collection<AgentProfile> profiles) {
+        this.llmClient = Objects.requireNonNull(llmClient, "llmClient");
+        this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry");
+        this.memoryManager = Objects.requireNonNull(memoryManager, "memoryManager");
+
+        TeamAgents team = createTeam(this.llmClient, this.toolRegistry, profiles);
+        this.planner = team.planner();
+        this.workers = team.workers();
+        this.reviewer = team.reviewer();
+        this.reviewerProfile = team.reviewerProfile();
+    }
+
+    public static AgentOrchestrator fromProfiles(LlmClient llmClient, ToolRegistry toolRegistry,
+                                                 MemoryManager memoryManager,
+                                                 Map<String, AgentProfile> profiles) {
+        return new AgentOrchestrator(llmClient, toolRegistry, memoryManager, profiles);
+    }
+
+    public static AgentOrchestrator fromProfileLoader(LlmClient llmClient, ToolRegistry toolRegistry,
+                                                      MemoryManager memoryManager,
+                                                      AgentProfileLoader loader) throws IOException {
+        return new AgentOrchestrator(llmClient, toolRegistry, memoryManager,
+                Objects.requireNonNull(loader, "loader").load());
+    }
+
+    private static TeamAgents createTeam(LlmClient llmClient, ToolRegistry toolRegistry,
+                                         Collection<AgentProfile> profiles) {
+        List<AgentProfile> safeProfiles = profiles == null
+                ? List.of()
+                : profiles.stream().filter(Objects::nonNull).toList();
+
+        AgentProfile plannerProfile = selectProfile(safeProfiles, AgentRole.PLANNER, "planner");
+        SubAgent planner = plannerProfile == null
+                ? new SubAgent("planner", AgentRole.PLANNER, llmClient, toolRegistry)
+                : SubAgent.fromProfile(plannerProfile, llmClient, toolRegistry);
+
+        List<AgentProfile> workerProfiles = profilesByRole(safeProfiles, AgentRole.WORKER);
+        List<SubAgent> workers = workerProfiles.isEmpty()
+                ? List.of(
+                        new SubAgent("worker-1", AgentRole.WORKER, llmClient, toolRegistry),
+                        new SubAgent("worker-2", AgentRole.WORKER, llmClient, toolRegistry)
+                )
+                : workerProfiles.stream()
+                        .map(profile -> SubAgent.fromProfile(profile, llmClient, toolRegistry))
+                        .toList();
+
+        AgentProfile reviewerProfile = selectProfile(safeProfiles, AgentRole.REVIEWER, "reviewer");
+        SubAgent reviewer = reviewerProfile == null
+                ? new SubAgent("reviewer", AgentRole.REVIEWER, llmClient, toolRegistry)
+                : SubAgent.fromProfile(reviewerProfile, llmClient, toolRegistry);
+
+        return new TeamAgents(planner, List.copyOf(workers), reviewer, reviewerProfile);
+    }
+
+    private static List<AgentProfile> profilesByRole(List<AgentProfile> profiles, AgentRole role) {
+        return profiles.stream()
+                .filter(profile -> profile.getRole() == role)
+                .toList();
+    }
+
+    private static AgentProfile selectProfile(List<AgentProfile> profiles, AgentRole role, String preferredName) {
+        List<AgentProfile> matching = profilesByRole(profiles, role);
+        if (matching.isEmpty()) {
+            return null;
+        }
+        return matching.stream()
+                .filter(profile -> preferredName.equals(profile.getName()))
+                .findFirst()
+                .orElse(matching.get(0));
     }
 
     /**
@@ -399,8 +476,7 @@ public class AgentOrchestrator {
 
             futures.add(executor.submit(() -> {
                 SubAgent worker = null;
-                SubAgent localReviewer = new SubAgent(
-                        "reviewer-" + step.id(), AgentRole.REVIEWER, llmClient, toolRegistry);
+                SubAgent localReviewer = createLocalReviewer(step.id());
                 try {
                     worker = workerPool.take();
                     runStep(step, steps, retryCount, worker, localReviewer, context, stepOut);
@@ -443,6 +519,14 @@ public class AgentOrchestrator {
                 System.out.flush();
             }
         }
+    }
+
+    private SubAgent createLocalReviewer(String stepId) {
+        if (reviewerProfile == null) {
+            return new SubAgent("reviewer-" + stepId, AgentRole.REVIEWER, llmClient, toolRegistry);
+        }
+        return new SubAgent(reviewerProfile.getName() + "-" + stepId, AgentRole.REVIEWER,
+                llmClient, toolRegistry, reviewerProfile.getInstructions(), reviewerProfile.getTools());
     }
 
     /**

@@ -55,6 +55,7 @@ class MainInputNormalizationTest {
         assertTrue(hints.stream().anyMatch(hint -> hint.contains("/loop")));
         assertTrue(hints.stream().anyMatch(hint -> hint.contains("/eval")));
         assertTrue(hints.stream().anyMatch(hint -> hint.contains("/agents")));
+        assertTrue(hints.stream().anyMatch(hint -> hint.contains("/hooks")));
     }
 
     @Test

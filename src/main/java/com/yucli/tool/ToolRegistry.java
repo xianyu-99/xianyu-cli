@@ -697,6 +697,7 @@ public class ToolRegistry {
                     : hookDecision.reason();
             return "[Hook] PreToolUse 拒绝: " + reason;
         }
+        argumentsJson = hookDecision.argumentsJsonOr(argumentsJson);
 
         boolean shouldAudit = shouldAudit(name);
         long start = System.nanoTime();

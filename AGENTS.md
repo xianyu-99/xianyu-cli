@@ -253,13 +253,18 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
 - 任务执行完后回到默认 `ReAct`
 - `ReAct`、`Plan-and-Execute` 和 `Multi-Agent` 三条路径都应写回记忆
 
-#### 6.1 可配置 SubAgent Profile（配置层）
+#### 6.1 可配置 SubAgent Profile
 
-- 当前第一步只提供轻量配置/加载层，主模块在 `src/main/java/com/yucli/agent/config/`，尚未接入 `AgentOrchestrator` 执行路径
+- 主模块在 `src/main/java/com/yucli/agent/config/`，已接入 `AgentOrchestrator` 执行路径
 - Profile 搜索目录：
   - 用户级：`~/.YuCLI/agents/*.json`
   - 项目级：`.YuCLI/agents/*.json`
 - 合并规则：先加载用户级，再加载项目级；同名 profile 由项目级覆盖用户级
+- `/team` / `/team <任务>` 创建 Multi-Agent 团队时会自动加载这些 profile：
+  - `PLANNER`：优先使用名为 `planner` 的 profile，否则使用第一个 planner profile，否则回退默认 planner
+  - `WORKER`：只要存在 worker profile，worker 池大小就等于 worker profile 数量；没有 worker profile 时回退默认 `worker-1` / `worker-2`
+  - `REVIEWER`：优先使用名为 `reviewer` 的 profile，否则使用第一个 reviewer profile，否则回退默认 reviewer
+- `SubAgent` 会在默认角色 prompt 后追加 profile 的 `instructions` 与工具白名单提示；当前 `tools` 是 prompt-level whitelist，不是 `ToolRegistry` 的硬过滤
 - 当前 JSON 格式：
 
 ```json
@@ -321,10 +326,15 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - 用户级：`~/.YuCLI/hooks.json`
   - 项目级：`.YuCLI/hooks.json`
 - 当前支持事件：
-  - `PreToolUse`：工具执行前触发；hook 命令非 0、超时或执行失败会阻断本次工具调用，返回 `[Hook] PreToolUse 拒绝: ...`
+  - `PreToolUse`：工具执行前触发；hook 命令非 0、超时、执行失败或结构化 `deny` 会阻断本次工具调用，返回 `[Hook] PreToolUse 拒绝: ...`
   - `PostToolUse`：工具执行后触发；失败只向 stderr 打印警告，不改变工具结果
 - `matcher` 支持精确工具名、`*`、前缀通配如 `mcp__*`
 - hook 命令通过 stdin 接收 JSON payload，包含 `event / tool_name / project_path / timestamp / arguments_raw / arguments`
+- `PreToolUse` hook stdout 支持最后一行或整个 stdout 输出结构化 JSON：
+  - `{"decision":"allow"}`：显式放行
+  - `{"decision":"deny","reason":"..."}`：阻断工具调用
+  - `{"decision":"modify","arguments":{...}}`：替换后续工具调用参数；`ToolRegistry` 会用修改后的参数执行、审计和触发 `PostToolUse`
+- `/hooks` / `/hooks list`：查看当前 hook 启用状态、事件计数、matcher、命令数量与 timeout
 - 配置格式：
 
 ```json
@@ -341,7 +351,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 ```
 
 - HITL 与 hook 的协同顺序：`HitlToolRegistry` 先处理人工审批；审批通过后进入 `ToolRegistry`，再执行 `PreToolUse`、策略层、真实工具、`PostToolUse`
-- 当前不支持 HTTP hook、异步 hook、LLM prompt hook、按 hook 返回 JSON 修改工具参数；这些属于后续扩展
+- 当前不支持 HTTP hook、异步 hook、LLM prompt hook；这些属于后续扩展
 
 ### 8. 异步执行与并行工具调用
 
@@ -478,6 +488,16 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 - `EvalHarness` 默认通过 `@EnabledIfSystemProperty(named = "YuCLI.eval.enabled", matches = "true")` 跳过，不能改成默认执行真实 LLM。涉及 eval harness 的改动至少保留一个测试确认默认门禁仍在
 - Eval case 的 `setupScript` / `verifyScript` 都在临时目录内执行，`verifyScript` 退出码 `0` 表示通过；新增用例时不要依赖真实用户目录、全局状态或不可回收的副作用
 
+### 17. Headless Run
+
+- 非交互入口：`yucli run <task> [--mode react|plan|team] [--json|--jsonl]`
+- Jar 运行示例：`java -jar target/yucli-19.0.0.jar run "summarize this repo" --json`
+- `run` 会在 banner / JLine / MCP 交互初始化之前处理，适合 CI、脚本和 GitHub Actions 包装
+- 输出为单行 JSON / JSONL，字段包括 `task / mode / success / result / error / durationMs`
+- 当前支持 `react`、`plan`、`team` 三种 mode；`plan` 使用自动执行的 plan review handler，`team` 会加载 SubAgent Profile
+- Headless 模式会捕获内部流式 stdout，避免污染 JSON；如果 Agent 因流式输出返回空字符串，会把捕获的 transcript 写回 `result`
+- 退出码：成功为 `0`，运行失败为 `1`，参数错误为 `2`
+
 ## 仓库结构
 
 ```text
@@ -571,6 +591,16 @@ src/main/java/com/yucli
 │   ├── HookDecision.java
 │   ├── HookEvent.java
 │   └── HookCommandExecutor.java
+├── runtime/
+│   ├── CancellationContext.java
+│   ├── CancellationToken.java
+│   └── headless/
+│       ├── HeadlessRunner.java
+│       ├── HeadlessRunRequest.java
+│       ├── HeadlessRunResult.java
+│       ├── HeadlessRunMode.java
+│       ├── HeadlessTaskExecutor.java
+│       └── JsonlEventWriter.java
 ├── web/
 │   ├── SearchProvider.java
 │   ├── ZhipuSearchProvider.java
@@ -615,7 +645,8 @@ src/main/java/com/yucli
 - `ApprovalResultTest`
 - `HitlToolRegistryTest`
 - `TerminalHitlHandlerTest`
-- `HookDefinitionTest`、`HookConfigLoaderTest`、`ToolRegistryHookTest`
+- `HookDefinitionTest`、`HookConfigLoaderTest`、`HookManagerDecisionTest`、`ToolRegistryHookTest`
+- `HeadlessRunnerTest`
 - `ToolRegistryTest`
 - `McpSchemaSanitizerTest`、`McpConfigLoaderTest`、`JsonRpcClientTest`、`McpToolBridgeTest`、`McpResourceCacheTest`、`AtMentionParserTest`、`AtMentionExpanderTest`、`AtMentionCompleterTest`、`NotificationRouterTest`
 - `PathGuardTest`、`CommandGuardTest`、`AuditLogTest`
@@ -777,7 +808,7 @@ src/main/java/com/yucli
 
 ### 2. 改命令入口，要联动这几处
 
-如果修改 `/plan`、`/team`、`/loop`、`/eval`、`/cancel`、`/hitl`、`/mcp`、`/policy`、`/audit`、`/browser`、`/skill`、`/tui`、`/clear`、`/memory`、`/save`、`/index`、`/search`、`/graph`、`/exit`、`/plugin`、`/session`、`/resume` 或输入解析：
+如果修改 `/plan`、`/team`、`/loop`、`/eval`、`/agents`、`/hooks`、`run`、`/cancel`、`/hitl`、`/mcp`、`/policy`、`/audit`、`/browser`、`/skill`、`/tui`、`/clear`、`/memory`、`/save`、`/index`、`/search`、`/graph`、`/exit`、`/plugin`、`/session`、`/resume` 或输入解析：
 
 - `Main.java`
 - `CliCommandParser.java`
