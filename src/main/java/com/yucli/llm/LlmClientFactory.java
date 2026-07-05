@@ -18,11 +18,12 @@ public class LlmClientFactory {
         String model = config.getModel(normalized);
 
         String baseUrl = config.getBaseUrl(normalized);
+        String reasoningEffort = config.getReasoningEffort(normalized);
 
         return switch (normalized) {
-            case "glm" -> new GLMClient(apiKey, baseUrl, model);
-            case "deepseek" -> new DeepSeekClient(apiKey, baseUrl, model);
-            case "anthropic" -> new AnthropicClient(baseUrl, apiKey, model);
+            case "glm" -> new GLMClient(apiKey, baseUrl, model, reasoningEffort);
+            case "deepseek" -> new DeepSeekClient(apiKey, baseUrl, model, reasoningEffort);
+            case "anthropic" -> new AnthropicClient(baseUrl, apiKey, model, reasoningEffort);
             case "openai" -> new OpenAiCompatibleClient(
                     "openai",
                     baseUrl,
@@ -31,7 +32,8 @@ public class LlmClientFactory {
                     "https://api.openai.com/v1",
                     "gpt-4o",
                     128_000,
-                    false
+                    false,
+                    reasoningEffort
             );
             case "qwen" -> new OpenAiCompatibleClient(
                     "qwen",
@@ -41,7 +43,8 @@ public class LlmClientFactory {
                     "https://dashscope.aliyuncs.com/compatible-mode/v1",
                     "qwen3-coder-plus",
                     1_000_000,
-                    false
+                    false,
+                    reasoningEffort
             );
             default -> null;
         };

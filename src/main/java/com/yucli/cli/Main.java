@@ -162,7 +162,7 @@ public class Main {
             System.exit(1);
         }
 
-        System.out.println("✅ 已加载模型: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")\n");
+        System.out.println("✅ 已加载模型: " + llmClient.getModelName() + " (" + formatProviderDetails(llmClient) + ")\n");
 
         try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
             TerminalHitlHandler hitlHandler = new TerminalHitlHandler(false);
@@ -575,7 +575,7 @@ public class Main {
                     case SWITCH_MODEL -> {
                         String provider = command.payload();
                         if (provider == null || provider.isEmpty()) {
-                            System.out.println("🤖 当前模型: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")");
+                            System.out.println("🤖 当前模型: " + llmClient.getModelName() + " (" + formatProviderDetails(llmClient) + ")");
                             System.out.println("   可用模型：anthropic, deepseek, glm, qwen, openai");
                             System.out.println("   /model anthropic - 切换到 Anthropic Messages 兼容接口");
                             System.out.println("   /model deepseek  - 切换到 DeepSeek OpenAI 兼容接口");
@@ -592,7 +592,7 @@ public class Main {
                                 config.save();
                                 reactAgent.setLlmClient(llmClient);
                                 hookManager.setLlmClient(llmClient);
-                                System.out.println("✅ 已切换到: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")");
+                                System.out.println("✅ 已切换到: " + llmClient.getModelName() + " (" + formatProviderDetails(llmClient) + ")");
                                 System.out.println("   对话上下文已保留，使用 /clear 可清空\n");
                             }
                         }
@@ -1416,6 +1416,14 @@ public class Main {
                 "输入 '/resume' 恢复上次未完成的会话",
                 "输入 '/exit'、'exit'、'q' 或 '退出' 退出"
         );
+    }
+
+    private static String formatProviderDetails(LlmClient llmClient) {
+        String effort = llmClient.getReasoningEffort();
+        if (effort == null || effort.isBlank()) {
+            return llmClient.getProviderName();
+        }
+        return llmClient.getProviderName() + ", reasoning=" + effort;
     }
 
     private static void printLoopStatus(LlmClient llmClient) {

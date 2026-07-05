@@ -8,6 +8,7 @@ public class OpenAiCompatibleClient extends AbstractOpenAiCompatibleClient {
     private final String model;
     private final int maxContextWindow;
     private final boolean supportsPromptCaching;
+    private final String reasoningEffort;
 
     public OpenAiCompatibleClient(
             String providerName,
@@ -19,12 +20,28 @@ public class OpenAiCompatibleClient extends AbstractOpenAiCompatibleClient {
             int maxContextWindow,
             boolean supportsPromptCaching
     ) {
+        this(providerName, baseUrl, apiKey, model, defaultBaseUrl, defaultModel,
+                maxContextWindow, supportsPromptCaching, null);
+    }
+
+    public OpenAiCompatibleClient(
+            String providerName,
+            String baseUrl,
+            String apiKey,
+            String model,
+            String defaultBaseUrl,
+            String defaultModel,
+            int maxContextWindow,
+            boolean supportsPromptCaching,
+            String reasoningEffort
+    ) {
         this.providerName = providerName;
         this.apiUrl = buildChatCompletionsUrl(baseUrl, defaultBaseUrl);
         this.apiKey = apiKey;
         this.model = model != null && !model.isBlank() ? model : defaultModel;
         this.maxContextWindow = maxContextWindow;
         this.supportsPromptCaching = supportsPromptCaching;
+        this.reasoningEffort = reasoningEffort;
     }
 
     static String buildChatCompletionsUrl(String baseUrl, String defaultBaseUrl) {
@@ -52,6 +69,11 @@ public class OpenAiCompatibleClient extends AbstractOpenAiCompatibleClient {
     @Override
     protected String getApiKey() {
         return apiKey;
+    }
+
+    @Override
+    public String getReasoningEffort() {
+        return reasoningEffort;
     }
 
     @Override

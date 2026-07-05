@@ -29,6 +29,7 @@ public class YuCLIConfig {
         private String apiKey;
         private String baseUrl;
         private String model;
+        private String reasoningEffort;
 
         public ProviderConfig() {}
 
@@ -38,12 +39,19 @@ public class YuCLIConfig {
             this.model = model;
         }
 
+        public ProviderConfig(String apiKey, String baseUrl, String model, String reasoningEffort) {
+            this(apiKey, baseUrl, model);
+            this.reasoningEffort = reasoningEffort;
+        }
+
         public String getApiKey() { return apiKey; }
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
+        public String getReasoningEffort() { return reasoningEffort; }
+        public void setReasoningEffort(String reasoningEffort) { this.reasoningEffort = reasoningEffort; }
     }
 
     public String getDefaultProvider() { return defaultProvider; }
@@ -73,6 +81,15 @@ public class YuCLIConfig {
             return providerConfig.getBaseUrl();
         }
         return loadBaseUrlFromEnv(provider);
+    }
+
+    public String getReasoningEffort(String provider) {
+        ProviderConfig providerConfig = providers.get(provider);
+        if (providerConfig != null && providerConfig.getReasoningEffort() != null
+                && !providerConfig.getReasoningEffort().isBlank()) {
+            return normalizeReasoningEffort(providerConfig.getReasoningEffort());
+        }
+        return loadReasoningEffortFromEnv(provider);
     }
 
     public static YuCLIConfig load() {
@@ -134,6 +151,43 @@ public class YuCLIConfig {
         }
 
         return null;
+    }
+
+    private static String loadReasoningEffortFromEnv(String provider) {
+        List<String> envKeys = reasoningEffortEnvKeys(provider);
+
+        for (String envKey : envKeys) {
+            String envValue = System.getenv(envKey);
+            if (envValue != null && !envValue.isBlank()) {
+                return normalizeReasoningEffort(envValue);
+            }
+        }
+
+        for (String envKey : envKeys) {
+            String dotEnvValue = readFromDotEnv(envKey);
+            if (dotEnvValue != null && !dotEnvValue.isBlank()) {
+                return normalizeReasoningEffort(dotEnvValue);
+            }
+        }
+
+        return null;
+    }
+
+    static List<String> reasoningEffortEnvKeys(String provider) {
+        String prefix = provider.toUpperCase();
+        return switch (provider.toLowerCase()) {
+            case "anthropic" -> List.of("ANTHROPIC_REASONING_EFFORT", "ANTHROPIC_MODEL_REASONING_EFFORT",
+                    "MODEL_REASONING_EFFORT", "YUCLI_REASONING_EFFORT");
+            default -> List.of(prefix + "_REASONING_EFFORT", prefix + "_MODEL_REASONING_EFFORT",
+                    "MODEL_REASONING_EFFORT", "YUCLI_REASONING_EFFORT");
+        };
+    }
+
+    private static String normalizeReasoningEffort(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().toLowerCase();
     }
 
     static List<String> apiKeyEnvKeys(String provider) {

@@ -15,6 +15,10 @@ public interface LlmClient {
 
     String getProviderName();
 
+    default String getReasoningEffort() {
+        return null;
+    }
+
     /**
      * 该模型的最大上下文窗口（token 数）。
      * 例如 GLM-5.1 返回 200_000，DeepSeek V4 / Claude Sonnet 返回 1_000_000。

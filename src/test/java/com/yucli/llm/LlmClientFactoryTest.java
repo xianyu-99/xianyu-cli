@@ -64,6 +64,18 @@ class LlmClientFactoryTest {
     }
 
     @Test
+    void create_anthropic_passesReasoningEffort() {
+        YuCLIConfig config = new YuCLIConfig();
+        config.getProviders().put("anthropic",
+                new YuCLIConfig.ProviderConfig("ant-key", "https://api.example.com", "gpt-5.5", "xhigh"));
+
+        LlmClient client = LlmClientFactory.create("anthropic", config);
+
+        assertNotNull(client);
+        assertEquals("xhigh", client.getReasoningEffort());
+    }
+
+    @Test
     void create_qwen_returnsOpenAiCompatibleClient() {
         YuCLIConfig config = configWith("qwen", "qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-max");
         LlmClient client = LlmClientFactory.create("qwen", config);

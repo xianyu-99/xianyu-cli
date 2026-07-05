@@ -46,6 +46,10 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
 
     protected abstract String getApiKey();
 
+    public String getReasoningEffort() {
+        return null;
+    }
+
     @Override
     public ChatResponse chat(List<Message> messages, List<Tool> tools) throws IOException {
         return chat(messages, tools, StreamListener.NO_OP);
@@ -163,6 +167,10 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         ObjectNode requestBody = mapper.createObjectNode();
         requestBody.put("model", getModel());
         requestBody.put("stream", true);
+        String reasoningEffort = getReasoningEffort();
+        if (reasoningEffort != null && !reasoningEffort.isBlank()) {
+            requestBody.put("reasoning_effort", reasoningEffort);
+        }
 
         ArrayNode messagesArray = requestBody.putArray("messages");
         for (Message msg : messages) {

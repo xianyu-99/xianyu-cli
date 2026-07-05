@@ -7,6 +7,7 @@ public class GLMClient extends AbstractOpenAiCompatibleClient {
     private final String apiKey;
     private final String apiUrl;
     private final String model;
+    private final String reasoningEffort;
 
     public GLMClient(String apiKey) {
         this(apiKey, DEFAULT_MODEL);
@@ -17,9 +18,14 @@ public class GLMClient extends AbstractOpenAiCompatibleClient {
     }
 
     public GLMClient(String apiKey, String baseUrl, String model) {
+        this(apiKey, baseUrl, model, null);
+    }
+
+    public GLMClient(String apiKey, String baseUrl, String model, String reasoningEffort) {
         this.apiKey = apiKey;
         this.apiUrl = OpenAiCompatibleClient.buildChatCompletionsUrl(baseUrl, API_URL);
         this.model = model != null && !model.isBlank() ? model : DEFAULT_MODEL;
+        this.reasoningEffort = reasoningEffort;
     }
 
     @Override
@@ -35,6 +41,11 @@ public class GLMClient extends AbstractOpenAiCompatibleClient {
     @Override
     protected String getApiKey() {
         return apiKey;
+    }
+
+    @Override
+    public String getReasoningEffort() {
+        return reasoningEffort;
     }
 
     @Override

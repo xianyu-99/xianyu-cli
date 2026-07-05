@@ -67,8 +67,11 @@ export ANTHROPIC_API_KEY=your-key
 # export ANTHROPIC_BASE_URL=https://api-us.popcorn.wiki/
 # export ANTHROPIC_AUTH_TOKEN=your-key
 # export ANTHROPIC_MODEL=your-anthropic-compatible-model
+# export ANTHROPIC_REASONING_EFFORT=xhigh
 # QWEN_API_KEY=your-key
+# QWEN_REASONING_EFFORT=high
 # OPENAI_API_KEY=your-key
+# OPENAI_REASONING_EFFORT=high
 ```
 
 ### 运行

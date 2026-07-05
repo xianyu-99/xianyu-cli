@@ -1,6 +1,11 @@
 package com.yucli.llm;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Method;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -72,5 +77,18 @@ class AnthropicClientTest {
     void supportsPromptCaching() {
         AnthropicClient client = new AnthropicClient(null, "key", "model");
         assertTrue(client.supportsPromptCaching());
+    }
+
+    @Test
+    void reasoningEffort_isIncludedInRequestBody() throws Exception {
+        AnthropicClient client = new AnthropicClient(null, "key", "model", "xhigh");
+
+        Method method = AnthropicClient.class.getDeclaredMethod("buildRequestBody", List.class, List.class);
+        method.setAccessible(true);
+        String body = (String) method.invoke(client, List.of(LlmClient.Message.user("hi")), List.of());
+        JsonNode root = new ObjectMapper().readTree(body);
+
+        assertEquals("xhigh", client.getReasoningEffort());
+        assertEquals("xhigh", root.path("reasoning_effort").asText());
     }
 }

@@ -40,7 +40,7 @@
 
 模型配置当前读取顺序以代码为准：
 
-1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl`
+1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl` / `reasoningEffort`
 2. 环境变量：`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `OPENAI_API_KEY` 等
 3. 仓库当前目录下的 `.env`
 4. 用户主目录下的 `.env`
@@ -52,14 +52,17 @@ ANTHROPIC_API_KEY=your_api_key_here
 # ANTHROPIC_AUTH_TOKEN=your_api_key_here
 # ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 # ANTHROPIC_MODEL=deepseek-v4-pro
+# ANTHROPIC_REASONING_EFFORT=xhigh
 # GLM_API_KEY=your_api_key_here
 # DEEPSEEK_API_KEY=your_deepseek_api_key_here
 # QWEN_API_KEY=your_qwen_api_key_here
 # QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 # QWEN_MODEL=qwen3-coder-plus
+# QWEN_REASONING_EFFORT=high
 # OPENAI_API_KEY=your_openai_compatible_key_here
 # OPENAI_BASE_URL=https://api.openai.com/v1
 # OPENAI_MODEL=gpt-4o
+# OPENAI_REASONING_EFFORT=high
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text:latest
 EMBEDDING_BASE_URL=http://localhost:11434
@@ -111,6 +114,15 @@ LLM HTTP 超时配置读取顺序（以代码实际行为为准）：
 2. 默认值：`60` / `300` / `60` / `600`（单位：秒）
 
 注意：SSE 流式接口下，OkHttp 的 `readTimeout` 是"两次 read 之间最大间隔"而非请求总时长；GLM-5.1 在生成大段 reasoning_content 时服务端可能长时间静默，所以默认值放宽到 300 秒，再用 `callTimeout` 兜底整个请求。
+
+Reasoning effort 配置读取顺序（以代码实际行为为准）：
+
+1. `~/.YuCLI/config.json` 中对应 provider 的 `reasoningEffort`
+2. provider 专属环境变量 / `.env`：`ANTHROPIC_REASONING_EFFORT`、`ANTHROPIC_MODEL_REASONING_EFFORT`、`QWEN_REASONING_EFFORT`、`OPENAI_REASONING_EFFORT` 等
+3. 通用环境变量 / `.env`：`MODEL_REASONING_EFFORT`、`YUCLI_REASONING_EFFORT`
+4. 未配置时不发送 `reasoning_effort` 字段，由服务端默认决定
+
+当前 Anthropic Messages wire 和 OpenAI-compatible Chat Completions wire 都会在配置存在时发送顶层 `reasoning_effort`。常见值包括 `low` / `medium` / `high` / `xhigh` / `max`，具体是否生效以所接入网关为准；CLI 启动和 `/model` 会显示当前读取到的值。
 
 Web 搜索 provider 配置读取顺序（以代码实际行为为准）：
 

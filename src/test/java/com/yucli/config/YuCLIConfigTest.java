@@ -120,6 +120,15 @@ class YuCLIConfigTest {
         assertEquals("https://open.bigmodel.cn", config.getBaseUrl("glm"));
     }
 
+    @Test
+    @DisplayName("getReasoningEffort returns normalized map value when provider is present")
+    void getReasoningEffort_providerInMap() {
+        YuCLIConfig config = new YuCLIConfig();
+        config.getProviders().put("anthropic",
+                new YuCLIConfig.ProviderConfig("ant-key", "https://api.example.com", "gpt-5.5", "XHigh"));
+        assertEquals("xhigh", config.getReasoningEffort("anthropic"));
+    }
+
     // ── getApiKey / getModel / getBaseUrl with provider NOT in map ───
     // (depends on no matching env var being set in the test environment)
 
@@ -175,6 +184,16 @@ class YuCLIConfigTest {
         assertEquals(
                 java.util.List.of("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
                 YuCLIConfig.apiKeyEnvKeys("anthropic")
+        );
+    }
+
+    @Test
+    @DisplayName("Anthropic reasoning effort accepts provider-specific and Codex-style aliases")
+    void anthropicReasoningEffortEnvKeys_includeAliases() {
+        assertEquals(
+                java.util.List.of("ANTHROPIC_REASONING_EFFORT", "ANTHROPIC_MODEL_REASONING_EFFORT",
+                        "MODEL_REASONING_EFFORT", "YUCLI_REASONING_EFFORT"),
+                YuCLIConfig.reasoningEffortEnvKeys("anthropic")
         );
     }
 
