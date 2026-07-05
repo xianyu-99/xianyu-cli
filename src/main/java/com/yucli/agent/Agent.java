@@ -81,7 +81,7 @@ public class Agent {
         if (mcpServerManager != null) {
             java.util.List<String> mcpPrompts = mcpServerManager.allPrompts();
             if (!mcpPrompts.isEmpty()) {
-                StringBuilder pb = new StringBuilder("\n\n可用 MCP Prompts（可通过 mcp__{server}__get_prompt 工具获取模板内容）：\n");
+                StringBuilder pb = new StringBuilder("\n\n可用 MCP Prompts（可通过 /mcp prompts <server> 查看模板列表，当前不提供 prompts/get 工具）：\n");
                 for (String prompt : mcpPrompts) {
                     pb.append("- ").append(prompt).append("\n");
                 }

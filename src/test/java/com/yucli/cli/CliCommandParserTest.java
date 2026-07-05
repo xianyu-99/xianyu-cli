@@ -216,6 +216,11 @@ class CliCommandParserTest {
         assertEquals("my-plugin", CliCommandParser.parse("/plugin disable my-plugin").payload());
         assertEquals(CliCommandParser.CommandType.PLUGIN_RELOAD, CliCommandParser.parse("/plugin reload").type());
         assertNull(CliCommandParser.parse("/plugin reload").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_TEMPLATE, CliCommandParser.parse("/plugin template").type());
+        assertNull(CliCommandParser.parse("/plugin template").payload());
+        assertEquals(CliCommandParser.CommandType.PLUGIN_TEMPLATE,
+                CliCommandParser.parse("/plugin template demo-tools").type());
+        assertEquals("demo-tools", CliCommandParser.parse("/plugin template demo-tools").payload());
     }
 
     @Test

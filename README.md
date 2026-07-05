@@ -109,6 +109,7 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 - Java ServiceLoader SPI + URLClassLoader 隔离
 - 命名空间隔离：`plugin__{name}__{tool}`
 - 状态持久化，`/plugin enable|disable`
+- 插件模板生成器：`/plugin template <name>`
 
 **会话管理**
 - 自动保存、手动保存（`/session save`）
@@ -134,6 +135,7 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 | `/mcp auth status\|revoke` | 查看/撤销认证 |
 | `/plugin` | 查看插件 |
 | `/plugin enable\|disable\|reload` | 管理插件 |
+| `/plugin template <name>` | 生成 Java 插件模板 |
 | `/session` | 查看会话列表 |
 | `/session save\|load\|delete\|export` | 管理会话 |
 | `/resume` | 恢复上次会话 |
@@ -393,6 +395,27 @@ YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / 
   "model": "glm-5.1"
 }
 ```
+
+## 生态模板
+
+YuCLI 在 `examples/` 下提供可复制的生态样板：
+
+- `examples/mcp/mcp.json`：stdio、Streamable HTTP、header auth、OAuth MCP server 模板。示例默认都是 `disabled: true`，需要审阅后再启用。
+- `examples/skills/`：可复制的 `SKILL.md` 示例，覆盖代码审查和 MCP research 工作流。
+- `examples/plugins/`：插件模板生成器用法。
+- `examples/agents/` 与 `examples/hooks/`：SubAgent profile 与 hook recipes。
+
+在 YuCLI 内生成 Java 插件脚手架：
+
+```text
+/plugin template demo-tools
+```
+
+该命令会生成 `demo-tools-yucli-plugin/`，包含 Maven 工程、`YuPlugin` 实现、ServiceLoader 元数据和一个 `echo` 示例工具。目标目录非空时会拒绝覆盖。
+
+## 沙箱边界
+
+YuCLI 当前已经有工具级 scope、路径围栏、命令拦截、HITL、hooks、审计日志，以及 SubAgent `allowedPaths` / `allowedCommands` 策略。它还没有把每个 SubAgent 或命令放进真正的进程级 filesystem sandbox，例如 container、gVisor 或 microVM。这仍属于更大的运行时隔离路线，和上面的 plugin / MCP / Skill 生态模板是两条不同工作线。
 
 ## License
 

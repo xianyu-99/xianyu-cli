@@ -29,6 +29,7 @@ import com.yucli.rag.SearchResultFormatter;
 import com.yucli.plugin.PluginInfo;
 import com.yucli.plugin.PluginManager;
 import com.yucli.plugin.PluginState;
+import com.yucli.plugin.PluginTemplateGenerator;
 import com.yucli.runtime.CancellationContext;
 import com.yucli.runtime.CancellationToken;
 import com.yucli.runtime.headless.HeadlessRunMode;
@@ -263,7 +264,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /loop /eval /agents /hooks /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /permissions /checkpoint /undo /audit /browser /skill /plugin /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
+                        System.out.println("可用命令：/model /loop /eval /agents /hooks /plan /team /hitl /mcp /mcp resources /mcp prompts /policy /permissions /checkpoint /undo /audit /browser /skill /plugin /plugin template /tui /clear /context /memory /memory clear /save /index /search /graph /session /resume /exit\n");
                         continue;
                     }
                     case TUI_LAUNCH -> {
@@ -405,6 +406,25 @@ public class Main {
                             System.out.println("   没有找到插件，将 .jar 文件放入 ~/.YuCLI/plugins/ 目录\n");
                         } else {
                             System.out.println("   已加载 " + reloadedPlugins.size() + " 个插件\n");
+                        }
+                        continue;
+                    }
+                    case PLUGIN_TEMPLATE -> {
+                        String pluginName = command.payload();
+                        if (pluginName == null || pluginName.isEmpty()) {
+                            System.out.println("Usage: /plugin template <name>\n");
+                        } else {
+                            try {
+                                PluginTemplateGenerator.GeneratedTemplate generated =
+                                        PluginTemplateGenerator.generate(pluginName, Path.of(System.getProperty("user.dir")));
+                                System.out.println("Generated plugin template: " + generated.projectDir());
+                                System.out.println("Plugin id: " + generated.pluginId());
+                                System.out.println("Build with: mvn -q package");
+                                System.out.println("Install jar to: ~/.YuCLI/plugins/");
+                                System.out.println();
+                            } catch (Exception e) {
+                                System.out.println("Failed to generate plugin template: " + e.getMessage() + "\n");
+                            }
                         }
                         continue;
                     }
@@ -1378,7 +1398,7 @@ public class Main {
                 "输入 '/hooks' 查看 PreToolUse / PostToolUse Hook 配置状态",
                 "输入 '/browser' 查看浏览器连接状态和标签页列表",
                 "输入 '/skill list' 查看 Skill，'/skill on|off <name>' 启用/禁用 Skill",
-                "输入 '/plugin' 查看插件，'/plugin enable|disable <name>' 启用/禁用插件，'/plugin reload' 重新加载",
+                "输入 '/plugin' 查看插件，'/plugin enable|disable <name>' 启用/禁用插件，'/plugin reload' 重新加载，'/plugin template <name>' 生成插件模板",
                 "输入 '/tui' 启动终端图形界面模式（TUI）",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",

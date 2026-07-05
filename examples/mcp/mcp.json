@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "disabled": true
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${PROJECT_DIR}"],
+      "disabled": true
+    },
+    "remote-header-demo": {
+      "url": "https://mcp.example.com/v1",
+      "headers": {
+        "Authorization": "Bearer ${MCP_REMOTE_TOKEN}",
+        "X-YuCLI-Project": "${PROJECT_DIR}"
+      },
+      "disabled": true
+    },
+    "remote-oauth-demo": {
+      "url": "https://mcp.example.com/oauth/mcp",
+      "oauth": true,
+      "clientId": "yucli-local",
+      "scopes": ["mcp:tools", "mcp:resources"],
+      "authorizationEndpoint": "https://mcp.example.com/oauth/authorize",
+      "tokenEndpoint": "https://mcp.example.com/oauth/token",
+      "disabled": true
+    }
+  }
+}

@@ -48,6 +48,7 @@ final class CliCommandParser {
         PLUGIN_ENABLE,
         PLUGIN_DISABLE,
         PLUGIN_RELOAD,
+        PLUGIN_TEMPLATE,
         SESSION_LIST,
         SESSION_SAVE,
         SESSION_LOAD,
@@ -295,6 +296,14 @@ final class CliCommandParser {
 
         if (trimmed.equalsIgnoreCase("/plugin reload")) {
             return new ParsedCommand(CommandType.PLUGIN_RELOAD, null);
+        }
+
+        if (trimmed.equalsIgnoreCase("/plugin template")) {
+            return new ParsedCommand(CommandType.PLUGIN_TEMPLATE, null);
+        }
+
+        if (trimmed.regionMatches(true, 0, "/plugin template ", 0, 17)) {
+            return new ParsedCommand(CommandType.PLUGIN_TEMPLATE, trimmed.substring(17).trim());
         }
 
         if (trimmed.equalsIgnoreCase("/session") || trimmed.equalsIgnoreCase("/session list")) {

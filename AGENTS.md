@@ -135,6 +135,8 @@ MCP 配置读取顺序（以代码实际行为为准）：
 
 配置格式兼容 Claude Code 的 `claude_desktop_config.json`：`command` + `args` 表示 stdio server，`url` + `headers` 表示 Streamable HTTP server。`${PROJECT_DIR}` 和 `${HOME}` 是内置变量；其他 `${VAR}` 从环境变量读取，缺失会直接报错。没有 MCP 配置文件时，MCP 子系统仍默认开启，但不会启动外部 server，避免首次运行被 `npx` / `uvx` 冷启动阻塞。
 
+官方 MCP 配置示例位于 `examples/mcp/mcp.json`，默认不自动加载，且示例 server 都带 `disabled: true`，复制到 `.YuCLI/mcp.json` 或 `~/.YuCLI/mcp.json` 后需要按项目实际情况审阅、补凭据并启用。
+
 ## 常用命令
 
 ```bash
@@ -450,7 +452,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 
 ### 11. MCP 高级能力首批
 
-本期交付 resources / prompts / 被动通知 / 运行中取消，不包含 OAuth 与 sampling。
+本期最早交付 resources / prompts / 被动通知 / 运行中取消；后续阶段已补 OAuth、sampling/createMessage 与 server 自动重启。
 
 - resources 双轨：
   - 工具层：支持 resources capability 的 server 会自动注册 `mcp__{server}__list_resources` / `mcp__{server}__read_resource` 两个虚拟工具
@@ -460,6 +462,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 - `notifications/tools/list_changed` 会触发该 server 工具列表全量替换，入口是 `ToolRegistry.replaceMcpToolsForServer(...)`
 - `/mcp resources <name>`：查看 server 暴露的 resources
 - `/mcp prompts <name>`：查看 server 暴露的 prompts；只查看，不执行 `prompts/get`，不注入对话流
+- 官方 MCP 示例位于 `examples/mcp/`，用于 stdio、Streamable HTTP、header auth 与 OAuth 配置起步
 - @-mention 读取 resource 记录 `approver=mention` 审计；通过虚拟工具读取仍走普通 `mcp__` 工具审计与 HITL 规则
 - `/cancel`：任务运行期间输入 `/cancel` 并回车，请求取消当前 Agent run；ReAct、Plan、Team、工具批次与 `execute_command` 会在边界处检查 `CancellationToken`
 - sampling/createMessage：`McpServerManager` 在启动时注册 sampling handler，路由到本地 LLM
@@ -467,6 +470,27 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 - prompts 注入：长上下文模式下 MCP prompt 模板自动注入 system prompt
 - resources 自动注入：长上下文模式下 MCP resource URI + 描述自动注入 system prompt（第 12 期已实现）
 - 当前明确不做：health ping / heartbeat、progress notification UI
+
+### 11.1 Skill 系统
+
+- 主模块在 `src/main/java/com/yucli/skill/`
+- `SkillLoader` 扫描目录或 classpath 下的 `SKILL.md`，解析 frontmatter 中的 `name` / `description` / `triggers`
+- `SkillRegistry` 加载内置 Skill 与用户级 `~/.YuCLI/skills/*/SKILL.md`；用户 Skill 可覆盖内置同名 Skill
+- ReAct 入口会按触发词把匹配 Skill 的说明注入当前任务上下文；`/skill list`、`/skill on <name>`、`/skill off <name>`、`/skill reload` 管理启用状态
+- `SKILL.md` 基本格式：
+
+```markdown
+---
+name: code-review
+description: Focused checklist for code review tasks
+triggers: [review, code review]
+---
+
+Instructions injected when the prompt matches a trigger.
+```
+
+- 官方 Skill 示例位于 `examples/skills/`，默认不自动加载；复制到 `~/.YuCLI/skills/` 后运行 `/skill reload`
+- 当前没有 `/skill template` 命令；可复制 `examples/skills/*/SKILL.md` 作为起点
 
 ### 12. TUI 模式
 
@@ -505,6 +529,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
 - `YuPlugin` 接口：`name()`、`description()`、`version()`、`onLoad(PluginContext)`、`onEnable()`、`onDisable()`、`onUnload()`
 - `PluginContext`：受限 API 表面，`registerTool()`、`registerSearchProvider()`、`getConfigDir()`
 - `PluginManager`：扫描 `~/.YuCLI/plugins/*.jar`，`URLClassLoader` + `ServiceLoader<YuPlugin>` 发现与加载
+- `PluginTemplateGenerator`：`/plugin template <name>` 在当前工作目录生成最小 Maven 插件工程，包含 `YuPlugin` 实现、ServiceLoader 描述文件和 `echo` 示例工具；目标目录非空时拒绝覆盖
 - 插件工具以 `plugin__` 前缀注册到 `ToolRegistry`，走 HITL 审批
 - 插件状态持久化到 `~/.YuCLI/plugins.json`
 - CLI 命令：
@@ -512,6 +537,8 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `/plugin enable <name>`：启用插件
   - `/plugin disable <name>`：禁用插件
   - `/plugin reload`：重新加载所有插件
+  - `/plugin template <name>`：生成 Java 插件模板
+- 官方插件模板说明位于 `examples/plugins/`
 
 ### 15. 会话持久化
 
@@ -603,7 +630,6 @@ src/main/java/com/yucli
 │   ├── McpClient.java
 │   ├── McpServerManager.java
 │   ├── McpServer.java
-│   ├── McpToolBridge.java
 │   ├── config/
 │   ├── jsonrpc/
 │   ├── protocol/
@@ -709,10 +735,11 @@ src/main/java/com/yucli
 - `CheckpointManagerTest`
 - `HeadlessRunnerTest`
 - `ToolRegistryTest`
-- `McpSchemaSanitizerTest`、`McpConfigLoaderTest`、`JsonRpcClientTest`、`McpToolBridgeTest`、`McpResourceCacheTest`、`AtMentionParserTest`、`AtMentionExpanderTest`、`AtMentionCompleterTest`、`NotificationRouterTest`
+- `McpSchemaSanitizerTest`、`McpConfigLoaderTest`、`JsonRpcClientTest`、`McpClientTest`、`McpToolRegistrationTest`、`McpResourceCacheTest`、`AtMentionParserTest`、`AtMentionExpanderTest`、`AtMentionCompleterTest`、`NotificationRouterTest`
 - `PathGuardTest`、`CommandGuardTest`、`AuditLogTest`、`PermissionProfileTest`、`PermissionProfileLoaderTest`
 - `TokenStoreTest`、`McpOAuthClientTest`
-- `PluginManagerTest`
+- `SkillLoaderTest`、`SkillRegistryTest`
+- `PluginManagerTest`、`PluginTemplateGeneratorTest`
 - `SessionManagerTest`
 - `BrowserToolProviderTest`
 - `TuiApplicationTest`
@@ -810,7 +837,7 @@ src/main/java/com/yucli
 
 另外会动态注册 MCP 工具：
 
-- `mcp__{server}__{tool}`：由 MCP server 的 `tools/list` 返回，`ToolRegistry.registerMcpTool()` 注入，执行时经 `McpToolBridge` 路由到 `tools/call`
+- `mcp__{server}__{tool}`：由 MCP server 的 `tools/list` 返回，`ToolRegistry.registerMcpTool()` 注入，执行时通过注册的 invoker 调用 `McpClient.callTool()`
 - MCP 工具不是内置 8 个之一，但会进入同一套 LLM tool definitions、并行执行、HITL 和 AuditLog 流程
 - 支持 resources capability 的 MCP server 还会注册两个虚拟工具：`mcp__{server}__list_resources` / `mcp__{server}__read_resource`
 
