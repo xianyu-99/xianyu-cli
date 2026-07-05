@@ -66,6 +66,17 @@ public class ScopedToolRegistry extends ToolRegistry {
     }
 
     @Override
+    public List<LlmClient.Tool> getToolDefinitions(String prompt) {
+        List<LlmClient.Tool> definitions = delegate.getToolDefinitions(prompt);
+        if (!hasToolDefinitionRestrictions()) {
+            return definitions;
+        }
+        return definitions.stream()
+                .filter(tool -> isAllowed(tool.name()))
+                .toList();
+    }
+
+    @Override
     public String executeTool(String name, String argumentsJson) {
         if (!isAllowed(name)) {
             return deniedResult(name);

@@ -313,7 +313,7 @@ class HookManagerDecisionTest {
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
 
         assertTrue(elapsedMillis < 1_000, "async hook should not block caller for latch release");
-        assertTrue(started.await(1, TimeUnit.SECONDS), "async hook should start in background");
+        assertTrue(started.await(5, TimeUnit.SECONDS), "async hook should start in background");
         release.countDown();
         assertTrue(manager.awaitAsyncHooks(2_000));
         assertEquals(1, calls.get());

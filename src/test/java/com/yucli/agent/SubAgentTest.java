@@ -121,7 +121,7 @@ class SubAgentTest {
     }
 
     @Test
-    void shouldKeepDefaultToolDefinitionsWhenProfileWhitelistIsEmpty() {
+    void shouldUsePromptScopedToolDefinitionsWhenProfileWhitelistIsEmpty() {
         CapturingSystemPromptClient llm = new CapturingSystemPromptClient();
         ToolRegistry tools = new ToolRegistry();
         SubAgent worker = new SubAgent("default-worker", AgentRole.WORKER, llm, tools,
@@ -130,9 +130,10 @@ class SubAgentTest {
         worker.execute(AgentMessage.task("orchestrator", "inspect repo"),
                 new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
 
-        List<String> expectedToolNames = tools.getToolDefinitions().stream().map(LlmClient.Tool::name).toList();
+        List<String> expectedToolNames = tools.getToolDefinitions("inspect repo").stream().map(LlmClient.Tool::name).toList();
         List<String> actualToolNames = llm.capturedTools.stream().map(LlmClient.Tool::name).toList();
         assertEquals(expectedToolNames, actualToolNames);
+        assertFalse(actualToolNames.contains("execute_command"));
     }
 
     @Test

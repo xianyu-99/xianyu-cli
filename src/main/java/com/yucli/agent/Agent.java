@@ -20,6 +20,7 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -173,10 +174,12 @@ public class Agent {
 
     public void setMcpServerManager(com.yucli.mcp.McpServerManager mcpServerManager) {
         this.mcpServerManager = mcpServerManager;
+        refreshSystemPrompt();
     }
 
     public void setSkillRegistry(com.yucli.skill.SkillRegistry skillRegistry) {
         this.skillRegistry = skillRegistry;
+        refreshSystemPrompt();
     }
 
     public com.yucli.skill.SkillRegistry getSkillRegistry() {
@@ -214,8 +217,8 @@ public class Agent {
         memoryManager.addUserMessage(userInput);
 
         // 检索相关长期记忆，注入到 system prompt
+        refreshSystemPrompt();
         String memoryContext = memoryManager.buildContextForQuery(userInput, 500);
-        updateSystemPromptWithMemory(memoryContext);
 
         // Skill 触发词匹配：命中时展开指令并追加到用户输入前
         String effectiveInput = userInput;
@@ -227,8 +230,12 @@ public class Agent {
             }
         }
 
-        // 添加用户输入到历史（保持原文，不污染 user message）
-        conversationHistory.add(LlmClient.Message.user(effectiveInput));
+        // 记忆上下文只临时注入本次 LLM run，run 结束后历史里恢复成原始用户输入。
+        String persistedUserInput = effectiveInput;
+        String llmUserInput = withMemoryContext(memoryContext, effectiveInput);
+        int userMessageIndex = conversationHistory.size();
+        conversationHistory.add(LlmClient.Message.user(llmUserInput));
+        List<LlmClient.Tool> activeToolDefinitions = toolRegistry.getToolDefinitions(userInput);
         StringBuilder reasoningTranscript = new StringBuilder();
         StreamRenderer streamRenderer = new StreamRenderer();
 
@@ -238,6 +245,7 @@ public class Agent {
 
         // 主退出条件 = LLM 自己决定（不再调用工具就返回）；
         // budget 仅在 token 用尽 / 检测到死循环 / 超出硬轮数时兜底。
+        try {
         while (true) {
             if (CancellationContext.isCancelled()) {
                 log.info("ReAct run cancelled before iteration");
@@ -245,7 +253,7 @@ public class Agent {
             }
             AgentBudget.ExitReason exitReason = budget.check();
             if (exitReason != AgentBudget.ExitReason.WITHIN_BUDGET) {
-                String statsLine = formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), accumulatedCachedTokens, startNanos);
+                String statsLine = formatTokenStats(budget, activeToolDefinitions.size(), startNanos);
                 String description = budget.describeExit(exitReason);
                 log.warn("ReAct run exhausted budget: reason={}, iteration={}, tokens={}/{}",
                         exitReason, budget.iteration(),
@@ -259,7 +267,7 @@ public class Agent {
                 // 调用 LLM
                 LlmClient.ChatResponse response = llmClient.chat(
                         conversationHistory,
-                        toolRegistry.getToolDefinitions(),
+                        activeToolDefinitions,
                         streamRenderer
                 );
                 if (CancellationContext.isCancelled()) {
@@ -267,7 +275,7 @@ public class Agent {
                     return "⏹️ 已取消当前任务。";
                 }
 
-                budget.recordTokens(response.inputTokens(), response.outputTokens());
+                budget.recordTokens(response.inputTokens(), response.outputTokens(), response.cachedTokens());
                 accumulatedCachedTokens += response.cachedTokens();
 
                 // 如果有工具调用
@@ -319,7 +327,7 @@ public class Agent {
                     log.debug("Assistant answer preview: {}", preview(response.content(), 500));
                 }
 
-                String statsLine = formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), accumulatedCachedTokens, startNanos);
+                String statsLine = formatTokenStats(budget, activeToolDefinitions.size(), startNanos);
 
                 if (streamRenderer.hasStreamedOutput()) {
                     streamRenderer.finish();
@@ -333,6 +341,9 @@ public class Agent {
                 log.error("LLM call failed in ReAct loop", e);
                 return "❌ 调用 LLM 失败: " + e.getMessage();
             }
+        }
+        } finally {
+            restoreUserMessage(userMessageIndex, persistedUserInput);
         }
     }
 
@@ -377,13 +388,28 @@ public class Agent {
     /**
      * 将记忆上下文注入到 system prompt 中（替换 conversationHistory[0]）
      */
-    private void updateSystemPromptWithMemory(String memoryContext) {
+    private void refreshSystemPrompt() {
         String basePrompt = buildSystemPrompt(memoryManager.getContextMode());
-        if (memoryContext == null || memoryContext.isEmpty()) {
-            conversationHistory.set(0, LlmClient.Message.system(basePrompt));
-        } else {
-            String enrichedPrompt = basePrompt + "\n" + memoryContext;
-            conversationHistory.set(0, LlmClient.Message.system(enrichedPrompt));
+        if (conversationHistory.isEmpty()) {
+            conversationHistory.add(LlmClient.Message.system(basePrompt));
+            return;
+        }
+        conversationHistory.set(0, LlmClient.Message.system(basePrompt));
+    }
+
+    private String withMemoryContext(String memoryContext, String input) {
+        if (memoryContext == null || memoryContext.isBlank()) {
+            return input;
+        }
+        return memoryContext + "\n\n用户当前输入:\n" + input;
+    }
+
+    private void restoreUserMessage(int index, String content) {
+        if (index >= 0 && index < conversationHistory.size()) {
+            LlmClient.Message message = conversationHistory.get(index);
+            if ("user".equals(message.role())) {
+                conversationHistory.set(index, LlmClient.Message.user(content));
+            }
         }
     }
 
@@ -441,12 +467,23 @@ public class Agent {
         return toolRegistry;
     }
 
-    private static String formatTokenStats(int inputTokens, int outputTokens, int cachedTokens, long startNanos) {
+    private static String formatTokenStats(AgentBudget budget, int toolCount, long startNanos) {
         double elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
-        String cacheHint = cachedTokens > 0 ? String.format(" (cached: %d)", cachedTokens) : "";
+        int inputTokens = budget.totalInputTokens();
+        int outputTokens = budget.totalOutputTokens();
+        int cachedTokens = budget.totalCachedTokens();
+        int totalTokens = inputTokens + outputTokens;
+        double cacheRate = inputTokens > 0 ? cachedTokens * 100.0 / inputTokens : 0.0;
+        String cacheHint = cachedTokens > 0
+                ? String.format(Locale.ROOT, " | cache %d (%.1f%%)", cachedTokens, cacheRate)
+                : " | cache 0";
+        String contextHint = budget.maxInputTokens() > 0
+                ? String.format(Locale.ROOT, " | ctx %d/%d", budget.maxInputTokens(), budget.contextWindow())
+                : "";
         return AnsiStyle.subtle(String.format(
-                "📊 Token: %d 输入 / %d 输出 / %d 合计%s | ⏱ %.1fs",
-                inputTokens, outputTokens, inputTokens + outputTokens, cacheHint, elapsedSeconds));
+                "📊 Token: %d 输入 / %d 输出 / %d 合计%s | effective %d/%d%s | tools %d | ⏱ %.1fs",
+                inputTokens, outputTokens, totalTokens, cacheHint,
+                budget.effectiveTokenUsage(), budget.tokenBudget(), contextHint, toolCount, elapsedSeconds));
     }
 
     private static long elapsedMillis(long startNanos) {

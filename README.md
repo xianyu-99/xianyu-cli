@@ -78,6 +78,13 @@ export ANTHROPIC_API_KEY=your-key
 # OPENAI_WIRE_API=responses
 # OPENAI_REASONING_EFFORT=xhigh
 # YUCLI_DEFAULT_PROVIDER=openai
+
+# 本地 LoRA 小模型只做工具意图识别/风险打分，不参与最终回答
+# YUCLI_ROUTER_ENABLED=true
+# YUCLI_ROUTER_BASE_URL=http://localhost:11434/v1
+# YUCLI_ROUTER_MODEL=qwen2.5:7b
+# YUCLI_ROUTER_API_KEY=ollama
+# YUCLI_ROUTER_TIMEOUT_SECONDS=8
 ```
 
 ### 运行
@@ -102,7 +109,8 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 **多模型支持**
 - DeepSeek V4、GLM-5.1、Qwen、Anthropic Claude、通用 OpenAI-compatible
 - 运行时切换：`/model deepseek`、`/model glm`、`/model qwen`、`/model openai`
-- Prompt Caching、流式输出、Token 统计
+- 本地 LoRA router：可用 Qwen2.5 小模型做工具意图识别/风险打分，主回答仍走主模型
+- Prompt Caching、流式输出、Token / cache / tools 性能面板
 
 **MCP 协议**
 - stdio 子进程 + Streamable HTTP 远程 server
@@ -211,10 +219,10 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 
 | 工具 | 说明 |
 |------|------|
-| `read_file` | 读取文件 |
+| `read_file` | 分页读取文件，支持 `start_line` / `end_line` / `max_chars` |
 | `write_file` | 写入文件 |
-| `list_dir` | 列出目录 |
-| `execute_command` | 执行 Shell 命令 |
+| `list_dir` | 列出目录，默认限制条目数避免上下文爆炸 |
+| `execute_command` | 执行 Shell 命令，输出截断时保留头尾 |
 | `create_project` | 创建项目（java/python/node） |
 | `search_code` | 语义检索代码 |
 | `web_search` | 联网搜索 |
@@ -263,7 +271,11 @@ Java 17 / Maven / OkHttp / Jackson / JLine3 / SQLite / JavaParser / Lanterna
 
 ### `/loop`
 
-`/loop` 是只读状态命令，用来查看 ReAct 循环的当前兜底规则。ReAct 是否继续由模型返回的 `tool_calls` 决定；`AgentBudget` 只负责三类保险阀：Token 预算、重复工具调用停滞检测、硬轮数上限。该命令不会调用 LLM，也不会执行工具。
+`/loop` 是只读状态命令，用来查看 ReAct 循环的当前兜底规则。ReAct 是否继续由模型返回的 `tool_calls` 决定；`AgentBudget` 只负责四类保险阀：单次上下文水位、有效 Token 预算、重复工具调用停滞检测、硬轮数上限。当前默认累计有效预算为 `258000`，预算判定会扣除已命中的 cached input tokens；上下文水位默认使用当前模型 `maxContextWindow() * 0.92`，因为 cached tokens 仍占真实上下文窗口。该命令不会调用 LLM，也不会执行工具。
+
+为提升速度与缓存命中率，ReAct / Plan / SubAgent 会按当前任务输入选择最小工具 schema；默认只暴露文件读取、目录列表和代码检索，写入、命令、联网、浏览器、MCP、插件工具按意图或 profile 加入。长期记忆会进入当前 user payload，不再动态拼进 system prompt。
+
+如果设置 `YUCLI_ROUTER_ENABLED=true`，YuCLI 会先调用本地 OpenAI-compatible 小模型（例如 Ollama / LM Studio / vLLM 上的 Qwen2.5 LoRA）做工具意图识别和风险打分；router 只返回 JSON 分类结果，不参与最终回答、不直接执行工具。router 低置信度、超时或失败时会自动回退关键词规则。
 
 ### `/eval`
 

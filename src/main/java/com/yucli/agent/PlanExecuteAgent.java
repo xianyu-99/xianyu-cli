@@ -422,6 +422,9 @@ public class PlanExecuteAgent {
         long startNanos = System.nanoTime();
         int totalInputTokens = 0;
         int totalOutputTokens = 0;
+        int totalCachedTokens = 0;
+        List<LlmClient.Tool> activeToolDefinitions =
+                toolRegistry.getToolDefinitions(task.getDescription() + "\n" + taskInput);
 
         while (iteration < MAX_TASK_ITERATIONS) {
             if (CancellationContext.isCancelled()) {
@@ -432,7 +435,7 @@ public class PlanExecuteAgent {
 
             LlmClient.ChatResponse response = llmClient.chat(
                     messages,
-                    toolRegistry.getToolDefinitions(),
+                    activeToolDefinitions,
                     streamRenderer
             );
             if (CancellationContext.isCancelled()) {
@@ -442,6 +445,7 @@ public class PlanExecuteAgent {
 
             totalInputTokens += response.inputTokens();
             totalOutputTokens += response.outputTokens();
+            totalCachedTokens += response.cachedTokens();
 
             log.info("Task {} iteration {} response: toolCalls={}, reasoningChars={}, contentChars={}",
                     task.getId(),
@@ -458,14 +462,16 @@ public class PlanExecuteAgent {
                         memoryManager.addAssistantMessage("[计划任务 " + task.getId() + "] " + toolOnlyResult);
                     }
                     streamRenderer.finish();
-                    out.println(formatTokenStats(totalInputTokens, totalOutputTokens, startNanos));
+                    out.println(formatTokenStats(totalInputTokens, totalOutputTokens, totalCachedTokens,
+                            activeToolDefinitions.size(), startNanos));
                     return TaskRunResult.of(toolOnlyResult, streamRenderer.hasStreamedOutput());
                 }
                 if (response.content() != null && !response.content().isBlank()) {
                     memoryManager.addAssistantMessage("[计划任务 " + task.getId() + "] " + response.content());
                 }
                 streamRenderer.finish();
-                out.println(formatTokenStats(totalInputTokens, totalOutputTokens, startNanos));
+                out.println(formatTokenStats(totalInputTokens, totalOutputTokens, totalCachedTokens,
+                        activeToolDefinitions.size(), startNanos));
                 return TaskRunResult.of(response.content(), streamRenderer.hasStreamedOutput());
             }
 
@@ -494,7 +500,8 @@ public class PlanExecuteAgent {
             memoryManager.addAssistantMessage("[计划任务 " + task.getId() + "] " + fallbackResult);
         }
         streamRenderer.finish();
-        out.println(formatTokenStats(totalInputTokens, totalOutputTokens, startNanos));
+        out.println(formatTokenStats(totalInputTokens, totalOutputTokens, totalCachedTokens,
+                activeToolDefinitions.size(), startNanos));
         return TaskRunResult.of(fallbackResult, streamRenderer.hasStreamedOutput());
     }
 
@@ -595,11 +602,16 @@ public class PlanExecuteAgent {
         }
     }
 
-    private static String formatTokenStats(int inputTokens, int outputTokens, long startNanos) {
+    private static String formatTokenStats(int inputTokens, int outputTokens, int cachedTokens,
+                                           int toolCount, long startNanos) {
         double elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
+        double cacheRate = inputTokens > 0 ? cachedTokens * 100.0 / inputTokens : 0.0;
+        String cacheHint = cachedTokens > 0
+                ? String.format(Locale.ROOT, " | cache %d (%.1f%%)", cachedTokens, cacheRate)
+                : " | cache 0";
         return AnsiStyle.subtle(String.format(
-                "📊 Token: %d 输入 / %d 输出 / %d 合计 | ⏱ %.1fs",
-                inputTokens, outputTokens, inputTokens + outputTokens, elapsedSeconds));
+                "📊 Token: %d 输入 / %d 输出 / %d 合计%s | tools %d | ⏱ %.1fs",
+                inputTokens, outputTokens, inputTokens + outputTokens, cacheHint, toolCount, elapsedSeconds));
     }
 
     private static long elapsedMillis(long startNanos) {

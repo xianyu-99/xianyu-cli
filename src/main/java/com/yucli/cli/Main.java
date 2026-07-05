@@ -1430,10 +1430,15 @@ public class Main {
         AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
         System.out.println("Loop 状态：");
         System.out.println("   模式: ReAct 由 LLM 决定是否继续调用工具；没有固定 10 轮上限");
-        System.out.println("   Token 预算: " + budget.tokenBudget() + "（当前模型上下文窗口的约 80%）");
+        System.out.println("   有效 Token 预算: " + budget.tokenBudget()
+                + "（累计 input - cached + output；默认 258000）");
+        System.out.println("   上下文水位: " + budget.contextTokenWatermark() + " / "
+                + budget.contextWindow() + "（上一轮 input tokens 达到水位会提前收尾）");
         System.out.println("   停滞检测: 连续 " + budget.stagnationWindow() + " 轮完全相同的工具名 + 参数会强制收尾");
         System.out.println("   硬轮数上限: " + budget.hardMaxIterations() + " 轮");
-        System.out.println("   可调系统属性: YuCLI.react.stagnation.window / YuCLI.react.hard.max.iterations");
+        System.out.println("   可调系统属性: YuCLI.react.token.budget / YuCLI.react.context.window / "
+                + "YuCLI.react.context.watermark.ratio / YuCLI.react.stagnation.window / "
+                + "YuCLI.react.hard.max.iterations");
         System.out.println();
     }
 

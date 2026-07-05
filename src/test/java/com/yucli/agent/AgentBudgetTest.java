@@ -75,6 +75,9 @@ class AgentBudgetTest {
     @Test
     void invalidConstructorArgumentsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new AgentBudget(0, 3, 50));
+        assertThrows(IllegalArgumentException.class, () -> new AgentBudget(100, 0, 0.92, 3, 50));
+        assertThrows(IllegalArgumentException.class, () -> new AgentBudget(100, 128_000, 0, 3, 50));
+        assertThrows(IllegalArgumentException.class, () -> new AgentBudget(100, 128_000, 1.1, 3, 50));
         assertThrows(IllegalArgumentException.class, () -> new AgentBudget(100, 1, 50));
         assertThrows(IllegalArgumentException.class, () -> new AgentBudget(100, 3, 0));
     }
@@ -89,7 +92,7 @@ class AgentBudgetTest {
     }
 
     @Test
-    void fromLlmClientCalculatesBudgetFromContextWindow() {
+    void fromLlmClientUsesFixedEffectiveBudgetAndClientContextWindow() {
         LlmClient client = new LlmClient() {
             @Override public ChatResponse chat(List<Message> messages, List<Tool> tools) { return null; }
             @Override public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) { return null; }
@@ -99,13 +102,41 @@ class AgentBudgetTest {
         };
 
         AgentBudget budget = AgentBudget.fromLlmClient(client);
-        assertEquals(160_000, budget.tokenBudget()); // 80% of 200k
+        assertEquals(258_000, budget.tokenBudget());
+        assertEquals(200_000, budget.contextWindow());
+        assertEquals(184_000, budget.contextTokenWatermark());
     }
 
     @Test
     void fromLlmClientFallsBackToDefaultWhenClientIsNull() {
         AgentBudget budget = AgentBudget.fromLlmClient(null);
-        assertEquals(300_000, budget.tokenBudget());
+        assertEquals(258_000, budget.tokenBudget());
+    }
+
+    @Test
+    void cachedTokensDoNotCountAgainstEffectiveBudget() {
+        AgentBudget budget = new AgentBudget(100, 3, 50);
+        budget.recordTokens(120, 10, 80);
+
+        assertEquals(130, budget.rawTokenUsage());
+        assertEquals(50, budget.effectiveTokenUsage());
+        assertEquals(AgentBudget.ExitReason.WITHIN_BUDGET, budget.check());
+
+        budget.recordTokens(50, 20, 0);
+        assertEquals(120, budget.effectiveTokenUsage());
+        assertEquals(AgentBudget.ExitReason.TOKEN_BUDGET_EXCEEDED, budget.check());
+    }
+
+    @Test
+    void contextWindowPressureUsesLastRawInputTokens() {
+        AgentBudget budget = new AgentBudget(1_000, 100, 0.9, 3, 50);
+        budget.recordTokens(89, 10, 80);
+        assertEquals(AgentBudget.ExitReason.WITHIN_BUDGET, budget.check());
+
+        budget.recordTokens(90, 0, 90);
+        assertEquals(AgentBudget.ExitReason.CONTEXT_WINDOW_NEAR_LIMIT, budget.check());
+        assertTrue(budget.describeExit(AgentBudget.ExitReason.CONTEXT_WINDOW_NEAR_LIMIT)
+                .contains("90 / 100"));
     }
 
     private LlmClient.ToolCall toolCall(String name, String args) {

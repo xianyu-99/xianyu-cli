@@ -2,11 +2,14 @@ package com.yucli.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.yucli.policy.PermissionProfile;
+import com.yucli.routing.IntentDecision;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -222,6 +225,92 @@ class ToolRegistryTest {
         assertDomSummaryControls(registry, "browser_navigate");
         assertDomSummaryControls(registry, "browser_click");
         assertDomSummaryControls(registry, "browser_type");
+    }
+
+    @Test
+    void readFileSupportsLineRangesAndTruncation() throws Exception {
+        Path tempDir = Files.createTempDirectory("YuCLI-test-");
+        try {
+            Path file = tempDir.resolve("large.txt");
+            StringBuilder content = new StringBuilder();
+            for (int i = 1; i <= 200; i++) {
+                content.append("line-").append(i).append(" abcdefghijklmnopqrstuvwxyz\n");
+            }
+            Files.writeString(file, content);
+
+            ToolRegistry registry = new ToolRegistry();
+            registry.setProjectPath(tempDir.toString());
+
+            String ranged = registry.executeTool("read_file",
+                    "{\"path\":\"large.txt\",\"start_line\":10,\"end_line\":12}");
+            assertTrue(ranged.contains("line-10"), ranged);
+            assertTrue(ranged.contains("line-12"), ranged);
+            assertFalse(ranged.contains("line-13"), ranged);
+
+            String truncated = registry.executeTool("read_file",
+                    "{\"path\":\"large.txt\",\"max_chars\":120}");
+            assertTrue(truncated.contains("内容已截断"), truncated);
+        } finally {
+            try { Files.deleteIfExists(tempDir.resolve("large.txt")); } catch (Exception ignored) {}
+            try { Files.deleteIfExists(tempDir); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    void promptScopedToolDefinitionsKeepDefaultSetSmall() {
+        ToolRegistry registry = new ToolRegistry();
+
+        List<String> defaultTools = registry.getToolDefinitions("解释这个项目").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+        assertTrue(defaultTools.contains("read_file"));
+        assertTrue(defaultTools.contains("list_dir"));
+        assertTrue(defaultTools.contains("search_code"));
+        assertFalse(defaultTools.contains("execute_command"));
+        assertFalse(defaultTools.contains("web_search"));
+
+        List<String> codingTools = registry.getToolDefinitions("修改代码后运行 mvn test").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+        assertTrue(codingTools.contains("write_file"));
+        assertTrue(codingTools.contains("execute_command"));
+
+        List<String> webTools = registry.getToolDefinitions("打开 https://example.com 看最新文档").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+        assertTrue(webTools.contains("web_search"));
+        assertTrue(webTools.contains("web_fetch"));
+    }
+
+    @Test
+    void promptScopedToolDefinitionsCanUseIntentRouterForWebAndCommand() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.setIntentRouter(prompt -> Optional.of(new IntentDecision(Set.of(),
+                false, true, true, false, false, false,
+                "medium", 0.9, "needs verification and lookup")));
+
+        List<String> routedTools = registry.getToolDefinitions("帮我做一次完整核验并查资料").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+
+        assertTrue(routedTools.contains("execute_command"));
+        assertTrue(routedTools.contains("web_search"));
+        assertTrue(routedTools.contains("web_fetch"));
+    }
+
+    @Test
+    void promptScopedToolDefinitionsCanUseIntentRouterSuggestedTools() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.setIntentRouter(prompt -> Optional.of(new IntentDecision(Set.of("browser_screenshot"),
+                false, false, false, false, false, false,
+                "low", 0.8, "screenshot requested")));
+
+        List<String> routedTools = registry.getToolDefinitions("看看现在画面是否正常").stream()
+                .map(com.yucli.llm.LlmClient.Tool::name)
+                .toList();
+
+        assertTrue(routedTools.contains("browser_screenshot"));
+        assertFalse(routedTools.contains("browser_click"));
     }
 
     private static boolean isWindows() {

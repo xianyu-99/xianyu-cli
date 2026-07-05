@@ -22,6 +22,9 @@ import com.yucli.policy.PermissionProfile;
 import com.yucli.policy.PermissionProfileDecision;
 import com.yucli.policy.PolicyException;
 import com.yucli.runtime.CancellationContext;
+import com.yucli.routing.IntentDecision;
+import com.yucli.routing.IntentRouter;
+import com.yucli.routing.LocalIntentRouter;
 import com.yucli.web.FetchResult;
 import com.yucli.web.HtmlExtractor;
 import com.yucli.web.NetworkPolicy;
@@ -50,6 +53,10 @@ public class ToolRegistry {
     private static final int DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS = 90;
     private static final int MAX_PARALLEL_TOOLS = 4;
     private static final int MAX_COMMAND_OUTPUT_CHARS = 8_000;
+    private static final int DEFAULT_READ_FILE_MAX_CHARS = 24_000;
+    private static final int MAX_READ_FILE_MAX_CHARS = 80_000;
+    private static final int MAX_LIST_DIR_ENTRIES = 200;
+    private static final int MAX_TOOL_RESULT_CHARS = 24_000;
     private static final int DEFAULT_SEARCH_TOP_K = 5;
     private static final int MAX_SEARCH_TOP_K = 20;
     // write_file 单次写入字节数上限。LLM 想塞超大内容时通常是误生成（重复粘贴 / hallucinate 大段日志），
@@ -80,6 +87,7 @@ public class ToolRegistry {
     private CheckpointManager checkpointManager;
     private Path checkpointRootOverride;
     private CommandSandboxDriver commandSandboxDriver = CommandSandboxDriver.fromEnvironment();
+    private IntentRouter intentRouter = LocalIntentRouter.fromEnvironment().orElse(null);
 
     public ToolRegistry() {
         this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, HookManager.disabled());
@@ -149,6 +157,10 @@ public class ToolRegistry {
                 : commandSandboxDriver;
     }
 
+    public void setIntentRouter(IntentRouter intentRouter) {
+        this.intentRouter = intentRouter;
+    }
+
     public String commandSandboxStatus() {
         return commandSandboxDriver == null ? "disabled" : commandSandboxDriver.statusText();
     }
@@ -204,15 +216,13 @@ public class ToolRegistry {
         tools.put("read_file", new Tool(
                 "read_file",
                 "读取文件内容（仅限项目根目录之内）",
-                createParameters(new Param("path", "string", "文件路径", true)),
-                args -> {
-                    Path safe = pathGuard.resolveSafe(args.get("path"));
-                    try {
-                        return "文件内容:\n" + Files.readString(safe);
-                    } catch (Exception e) {
-                        return "读取文件失败: " + e.getMessage();
-                    }
-                }
+                createParameters(
+                        new Param("path", "string", "文件路径", true),
+                        new Param("start_line", "integer", "起始行号（从 1 开始，可选）", false),
+                        new Param("end_line", "integer", "结束行号（包含，可选）", false),
+                        new Param("max_chars", "integer", "返回最大字符数，默认 24000，最大 80000", false)
+                ),
+                this::readFile
         ));
 
         // write_file 工具
@@ -253,31 +263,138 @@ public class ToolRegistry {
         tools.put("list_dir", new Tool(
                 "list_dir",
                 "列出目录内容（仅限项目根目录之内）",
-                createParameters(new Param("path", "string", "目录路径", true)),
-                args -> {
-                    Path safe = pathGuard.resolveSafe(args.get("path"));
-                    try {
-                        File[] files = safe.toFile().listFiles();
-                        if (files == null) {
-                            return "目录为空或不存在";
-                        }
-                        StringBuilder sb = new StringBuilder("目录内容:\n");
-                        for (File f : files) {
-                            sb.append(f.isDirectory() ? "[D] " : "[F] ")
-                              .append(f.getName())
-                              .append("\n");
-                        }
-                        return sb.toString();
-                    } catch (Exception e) {
-                        return "列出目录失败: " + e.getMessage();
-                    }
-                }
+                createParameters(
+                        new Param("path", "string", "目录路径", true),
+                        new Param("max_entries", "integer", "返回最大条目数，默认 200", false)
+                ),
+                this::listDirectory
         ));
     }
 
     /**
      * 注册Shell命令工具
      */
+    private String readFile(Map<String, String> args) {
+        String path = args.get("path");
+        Path safe = pathGuard.resolveSafe(path);
+        int startLine = Math.max(1, parseInt(args.get("start_line"), 1));
+        int endLine = parseInt(args.get("end_line"), -1);
+        int maxChars = clamp(parseInt(args.get("max_chars"), DEFAULT_READ_FILE_MAX_CHARS),
+                1, MAX_READ_FILE_MAX_CHARS);
+        if (endLine > 0 && endLine < startLine) {
+            return "读取文件失败: end_line 不能小于 start_line";
+        }
+
+        try {
+            if (!Files.isRegularFile(safe)) {
+                return "读取文件失败: 目标不是普通文件";
+            }
+            if (isLikelyBinary(safe)) {
+                return "读取文件失败: 文件可能是二进制内容，请改用专门工具处理";
+            }
+
+            StringBuilder body = new StringBuilder();
+            int returnedLines = 0;
+            int lastLineSeen = 0;
+            boolean truncated = false;
+
+            try (BufferedReader reader = Files.newBufferedReader(safe, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    lastLineSeen++;
+                    if (lastLineSeen < startLine) {
+                        continue;
+                    }
+                    if (endLine > 0 && lastLineSeen > endLine) {
+                        break;
+                    }
+
+                    String rendered = String.format(Locale.ROOT, "%6d | %s%n", lastLineSeen, line);
+                    if (body.length() + rendered.length() > maxChars) {
+                        truncated = true;
+                        break;
+                    }
+                    body.append(rendered);
+                    returnedLines++;
+                }
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("文件内容: ").append(path)
+                    .append(" (从第 ").append(startLine).append(" 行开始");
+            if (endLine > 0) {
+                result.append("，到第 ").append(endLine).append(" 行");
+            }
+            result.append("，返回 ").append(returnedLines).append(" 行，max_chars=")
+                    .append(maxChars).append(")\n");
+            if (body.isEmpty()) {
+                result.append("(没有匹配的行)\n");
+            } else {
+                result.append(body);
+            }
+            if (truncated) {
+                result.append("\n...(内容已截断，请用 start_line/end_line/max_chars 继续读取)...");
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return "读取文件失败: " + e.getMessage();
+        }
+    }
+
+    private String listDirectory(Map<String, String> args) {
+        String path = args.get("path");
+        Path safe = pathGuard.resolveSafe(path);
+        int maxEntries = clamp(parseInt(args.get("max_entries"), MAX_LIST_DIR_ENTRIES),
+                1, MAX_LIST_DIR_ENTRIES);
+        try {
+            File[] files = safe.toFile().listFiles();
+            if (files == null) {
+                return "目录为空或不存在";
+            }
+            Arrays.sort(files, Comparator
+                    .comparing((File f) -> !f.isDirectory())
+                    .thenComparing(File::getName, String.CASE_INSENSITIVE_ORDER));
+
+            StringBuilder sb = new StringBuilder("目录内容: ")
+                    .append(path)
+                    .append(" (显示 ")
+                    .append(Math.min(files.length, maxEntries))
+                    .append("/")
+                    .append(files.length)
+                    .append(")\n");
+            for (int i = 0; i < Math.min(files.length, maxEntries); i++) {
+                File f = files[i];
+                sb.append(f.isDirectory() ? "[D] " : "[F] ")
+                        .append(f.getName())
+                        .append("\n");
+            }
+            if (files.length > maxEntries) {
+                sb.append("...(已省略 ").append(files.length - maxEntries)
+                        .append(" 个条目，请指定更精确路径继续)...");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "列出目录失败: " + e.getMessage();
+        }
+    }
+
+    private static boolean isLikelyBinary(Path path) throws IOException {
+        byte[] bytes;
+        try (var in = Files.newInputStream(path)) {
+            bytes = in.readNBytes(4096);
+        }
+        for (byte b : bytes) {
+            if (b == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private void registerShellTools() {
         tools.put("execute_command", new Tool(
                 "execute_command",
@@ -683,6 +800,126 @@ public class ToolRegistry {
     }
 
     /**
+     * Return a prompt-scoped tool set to keep tool schema small and cache prefixes stable.
+     * The no-arg method remains full fidelity for tests, explicit profiles, and integrations.
+     */
+    public List<com.yucli.llm.LlmClient.Tool> getToolDefinitions(String prompt) {
+        Set<String> selected = selectToolNames(prompt);
+        return tools.values().stream()
+                .filter(t -> selected.contains(t.name()) || shouldExposeDynamicTool(t.name(), prompt))
+                .map(t -> new com.yucli.llm.LlmClient.Tool(t.name(), t.description(), t.parameters()))
+                .toList();
+    }
+
+    private Set<String> selectToolNames(String prompt) {
+        Set<String> selected = new LinkedHashSet<>();
+        selected.add("read_file");
+        selected.add("list_dir");
+        selected.add("search_code");
+
+        IntentDecision decision = routeIntent(prompt);
+        if (decision != null) {
+            applyIntentDecision(selected, decision);
+        }
+
+        applyHeuristicToolExpansion(selected, prompt);
+        return selected;
+    }
+
+    private IntentDecision routeIntent(String prompt) {
+        if (intentRouter == null) {
+            return null;
+        }
+        try {
+            return intentRouter.route(prompt).orElse(null);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private void applyIntentDecision(Set<String> selected, IntentDecision decision) {
+        for (String toolName : decision.suggestedTools()) {
+            if (tools.containsKey(toolName)) {
+                selected.add(toolName);
+            }
+        }
+        if (decision.needsWrite()) {
+            selected.add("write_file");
+            selected.add("create_project");
+        }
+        if (decision.needsCommand()) {
+            selected.add("execute_command");
+        }
+        if (decision.needsWeb()) {
+            selected.add("web_search");
+            selected.add("web_fetch");
+        }
+        if (decision.needsBrowser()) {
+            selected.add("browser_navigate");
+            selected.add("browser_screenshot");
+            selected.add("browser_click");
+            selected.add("browser_type");
+            selected.add("browser_evaluate");
+            selected.add("browser_get_dom");
+            selected.add("browser_tab");
+            selected.add("browser_close");
+        }
+    }
+
+    private void applyHeuristicToolExpansion(Set<String> selected, String prompt) {
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        if (containsAny(text, "改", "修改", "修复", "实现", "新增", "创建", "生成", "补", "优化",
+                "write", "edit", "fix", "implement", "create", "generate", "update")) {
+            selected.add("write_file");
+            selected.add("create_project");
+            selected.add("execute_command");
+        }
+        if (containsAny(text, "运行", "执行", "测试", "构建", "编译", "命令", "提交", "推送",
+                "mvn", "npm", "pnpm", "git", "docker", "run", "test", "build", "compile", "command", "push")) {
+            selected.add("execute_command");
+        }
+        if (containsAny(text, "http://", "https://", "url", "网页", "网站", "联网", "搜索", "最新", "github",
+                "文档", "web", "search", "latest", "docs")) {
+            selected.add("web_search");
+            selected.add("web_fetch");
+        }
+        if (containsAny(text, "浏览器", "截图", "点击", "输入", "登录", "页面", "browser", "screenshot", "click", "login")) {
+            selected.add("browser_navigate");
+            selected.add("browser_screenshot");
+            selected.add("browser_click");
+            selected.add("browser_type");
+            selected.add("browser_evaluate");
+            selected.add("browser_get_dom");
+            selected.add("browser_tab");
+            selected.add("browser_close");
+        }
+    }
+
+    private boolean shouldExposeDynamicTool(String toolName, String prompt) {
+        if (toolName == null) {
+            return false;
+        }
+        String text = prompt == null ? "" : prompt.toLowerCase(Locale.ROOT);
+        String lowerTool = toolName.toLowerCase(Locale.ROOT);
+        if (toolName.startsWith("mcp__")) {
+            return text.contains("mcp") || text.contains("@") || text.contains(lowerTool);
+        }
+        if (toolName.startsWith("plugin__")) {
+            return text.contains("plugin") || text.contains("插件") || text.contains(lowerTool);
+        }
+        return false;
+    }
+
+    private static boolean containsAny(String text, String... needles) {
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && text.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 注册一个 MCP 工具到 ToolRegistry。
      *
      * @param descriptor 工具描述（含 namespacedName 如 mcp__filesystem__read_file）
@@ -800,7 +1037,7 @@ public class ToolRegistry {
         try {
             McpRegisteredTool mcpTool = mcpTools.get(name);
             if (mcpTool != null) {
-                result = mcpTool.invoker().apply(argumentsJson);
+                result = limitToolResult(name, mcpTool.invoker().apply(argumentsJson));
                 if (shouldAudit) {
                     auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
                 }
@@ -811,7 +1048,7 @@ public class ToolRegistry {
             PluginRegisteredTool pluginTool = pluginTools.get(name);
             if (pluginTool != null) {
                 JsonNode argsNode = mapper.readTree(argumentsJson);
-                result = pluginTool.executor().execute(argsNode);
+                result = limitToolResult(name, pluginTool.executor().execute(argsNode));
                 if (shouldAudit) {
                     auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
                 }
@@ -823,7 +1060,7 @@ public class ToolRegistry {
             Map<String, String> argMap = new HashMap<>();
             args.fields().forEachRemaining(entry ->
                     argMap.put(entry.getKey(), entry.getValue().asText()));
-            result = tool.executor().execute(argMap);
+            result = limitToolResult(name, tool.executor().execute(argMap));
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
             }
@@ -971,6 +1208,18 @@ public class ToolRegistry {
                 || (name != null && name.startsWith("plugin__"));
     }
 
+    private static String limitToolResult(String toolName, String result) {
+        if (result == null || result.length() <= MAX_TOOL_RESULT_CHARS) {
+            return result;
+        }
+        int headChars = MAX_TOOL_RESULT_CHARS / 2;
+        int tailChars = MAX_TOOL_RESULT_CHARS - headChars;
+        return result.substring(0, headChars)
+                + "\n...(工具结果已截断: " + toolName + "，原始 " + result.length()
+                + " 字符，保留头尾；请缩小查询范围或分页读取)...\n"
+                + result.substring(result.length() - tailChars);
+    }
+
     private static String mcpDescription(McpToolDescriptor descriptor) {
         String base = descriptor.description() == null || descriptor.description().isBlank()
                 ? "MCP server 提供的外部工具"
@@ -1074,23 +1323,43 @@ public class ToolRegistry {
     }
 
     private String readProcessOutput(Process process) throws Exception {
-        StringBuilder output = new StringBuilder();
+        int headLimit = MAX_COMMAND_OUTPUT_CHARS / 2;
+        int tailLimit = MAX_COMMAND_OUTPUT_CHARS - headLimit;
+        StringBuilder head = new StringBuilder();
+        Deque<String> tail = new ArrayDeque<>();
+        int tailChars = 0;
+        int totalChars = 0;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (output.length() < MAX_COMMAND_OUTPUT_CHARS) {
-                    int remaining = MAX_COMMAND_OUTPUT_CHARS - output.length();
-                    if (line.length() > remaining) {
-                        output.append(line, 0, remaining);
-                    } else {
-                        output.append(line);
-                    }
-                    output.append("\n");
+                String rendered = line + "\n";
+                totalChars += rendered.length();
+                if (head.length() < headLimit) {
+                    int remaining = headLimit - head.length();
+                    head.append(rendered, 0, Math.min(remaining, rendered.length()));
+                    continue;
+                }
+
+                tail.addLast(rendered);
+                tailChars += rendered.length();
+                while (tailChars > tailLimit && !tail.isEmpty()) {
+                    tailChars -= tail.removeFirst().length();
                 }
             }
         }
-        if (output.length() >= MAX_COMMAND_OUTPUT_CHARS) {
-            return output.substring(0, MAX_COMMAND_OUTPUT_CHARS) + "\n...(输出已截断)";
+        if (totalChars <= MAX_COMMAND_OUTPUT_CHARS) {
+            StringBuilder output = new StringBuilder(head);
+            for (String item : tail) {
+                output.append(item);
+            }
+            return output.toString();
+        }
+        StringBuilder output = new StringBuilder(head);
+        output.append("\n...(输出中间已截断，原始约 ")
+                .append(totalChars)
+                .append(" 字符，保留头尾)...\n");
+        for (String item : tail) {
+            output.append(item);
         }
         return output.toString();
     }

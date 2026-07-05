@@ -283,6 +283,10 @@ public class SubAgent {
 
         long startNanos = System.nanoTime();
         AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
+        List<LlmClient.Tool> activeToolDefinitions = shouldUseTools()
+                ? toolRegistry.getToolDefinitions(taskContent)
+                : null;
+        int activeToolCount = activeToolDefinitions == null ? 0 : activeToolDefinitions.size();
 
         // 与 Agent.java 对称：主退出条件 = LLM 自决，budget 仅在 token / 停滞 / 硬轮数兜底。
         while (true) {
@@ -294,7 +298,7 @@ public class SubAgent {
             AgentBudget.ExitReason exitReason = budget.check();
             if (exitReason != AgentBudget.ExitReason.WITHIN_BUDGET) {
                 streamRenderer.finish();
-                out.println(formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), startNanos));
+                out.println(formatTokenStats(budget, activeToolCount, startNanos));
                 String description = budget.describeExit(exitReason);
                 log.warn("[{}] run exhausted budget: reason={}, iteration={}, tokens={}/{}",
                         name, exitReason, budget.iteration(),
@@ -307,7 +311,7 @@ public class SubAgent {
             try {
                 LlmClient.ChatResponse response = llmClient.chat(
                         conversationHistory,
-                        shouldUseTools() ? toolRegistry.getToolDefinitions() : null,
+                        activeToolDefinitions,
                         streamRenderer
                 );
                 if (CancellationContext.isCancelled()) {
@@ -315,7 +319,7 @@ public class SubAgent {
                     return cancelledResult(streamRenderer);
                 }
 
-                budget.recordTokens(response.inputTokens(), response.outputTokens());
+                budget.recordTokens(response.inputTokens(), response.outputTokens(), response.cachedTokens());
 
                 if (response.hasToolCalls()) {
                     budget.recordToolCalls(response.toolCalls());
@@ -348,7 +352,7 @@ public class SubAgent {
                 ));
 
                 streamRenderer.finish();
-                out.println(formatTokenStats(budget.totalInputTokens(), budget.totalOutputTokens(), startNanos));
+                out.println(formatTokenStats(budget, activeToolCount, startNanos));
 
                 return AgentMessage.result(name, role, response.content());
 
@@ -497,11 +501,22 @@ public class SubAgent {
         }
     }
 
-    private static String formatTokenStats(int inputTokens, int outputTokens, long startNanos) {
+    private static String formatTokenStats(AgentBudget budget, int toolCount, long startNanos) {
         double elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
+        int inputTokens = budget.totalInputTokens();
+        int outputTokens = budget.totalOutputTokens();
+        int cachedTokens = budget.totalCachedTokens();
+        double cacheRate = inputTokens > 0 ? cachedTokens * 100.0 / inputTokens : 0.0;
+        String cacheHint = cachedTokens > 0
+                ? String.format(Locale.ROOT, " | cache %d (%.1f%%)", cachedTokens, cacheRate)
+                : " | cache 0";
+        String contextHint = budget.maxInputTokens() > 0
+                ? String.format(Locale.ROOT, " | ctx %d/%d", budget.maxInputTokens(), budget.contextWindow())
+                : "";
         return AnsiStyle.subtle(String.format(
-                "📊 Token: %d 输入 / %d 输出 / %d 合计 | ⏱ %.1fs",
-                inputTokens, outputTokens, inputTokens + outputTokens, elapsedSeconds));
+                "📊 Token: %d 输入 / %d 输出 / %d 合计%s | effective %d/%d%s | tools %d | ⏱ %.1fs",
+                inputTokens, outputTokens, inputTokens + outputTokens, cacheHint,
+                budget.effectiveTokenUsage(), budget.tokenBudget(), contextHint, toolCount, elapsedSeconds));
     }
 
     private static long elapsedMillis(long startNanos) {

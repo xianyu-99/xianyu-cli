@@ -64,6 +64,10 @@ ANTHROPIC_API_KEY=your_api_key_here
 # OPENAI_MODEL=gpt-4o
 # OPENAI_WIRE_API=responses
 # OPENAI_REASONING_EFFORT=high
+# YUCLI_ROUTER_ENABLED=true
+# YUCLI_ROUTER_BASE_URL=http://localhost:11434/v1
+# YUCLI_ROUTER_MODEL=qwen2.5:7b
+# YUCLI_ROUTER_API_KEY=ollama
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text:latest
 EMBEDDING_BASE_URL=http://localhost:11434
@@ -73,6 +77,9 @@ EMBEDDING_BASE_URL=http://localhost:11434
 # YuCLI_LOG_MAX_HISTORY=7
 # YuCLI_LOG_MAX_FILE_SIZE=10MB
 # YuCLI_LOG_TOTAL_SIZE_CAP=100MB
+# YUCLI_REACT_TOKEN_BUDGET=258000
+# YUCLI_REACT_STAGNATION_WINDOW=3
+# YUCLI_REACT_HARD_MAX_ITERATIONS=50
 ```
 
 长期记忆默认持久化位置：
@@ -106,8 +113,11 @@ Embedding 配置读取顺序（以代码实际行为为准）：
 
 ReAct / SubAgent 预算配置读取顺序（以代码实际行为为准）：
 
-1. 系统属性：`YuCLI.react.token.budget`、`YuCLI.react.stagnation.window`、`YuCLI.react.hard.max.iterations`
-2. 默认值：`300000` / `3` / `50`
+1. 系统属性：`YuCLI.react.token.budget`、`YuCLI.react.context.window`、`YuCLI.react.context.watermark.ratio`、`YuCLI.react.stagnation.window`、`YuCLI.react.hard.max.iterations`
+2. 环境变量或 `.env`：`YUCLI_REACT_TOKEN_BUDGET`、`YUCLI_REACT_CONTEXT_WINDOW`、`YUCLI_REACT_CONTEXT_WATERMARK_RATIO`、`YUCLI_REACT_STAGNATION_WINDOW`、`YUCLI_REACT_HARD_MAX_ITERATIONS`
+3. 默认值：`258000` / 当前模型 `maxContextWindow()` / `0.92` / `3` / `50`
+
+`AgentBudget.fromLlmClient()` 会把“累计有效消耗”和“当前上下文压力”分开处理：累计预算默认 `258000`，判定使用有效 token：`inputTokens - cachedTokens + outputTokens`；上下文水位使用上一轮原始 `inputTokens` 对比 `contextWindow * 0.92`，因为 cached tokens 仍占真实上下文窗口。原始 token、缓存命中、有效预算和上下文水位会在性能面板展示。
 
 LLM HTTP 超时配置读取顺序（以代码实际行为为准）：
 
@@ -131,6 +141,14 @@ OpenAI wire 配置读取顺序：
 2. provider 专属环境变量 / `.env`：`OPENAI_WIRE_API`、`OPENAI_WIRE`
 3. 通用环境变量 / `.env`：`MODEL_WIRE_API`、`YUCLI_WIRE_API`
 4. 未配置时默认使用 Chat Completions wire；配置为 `responses` 时使用 `/v1/responses`
+
+本地意图路由器配置读取顺序（默认关闭）：
+
+1. 系统属性：`YuCLI.router.enabled`、`YuCLI.router.base.url`、`YuCLI.router.model`、`YuCLI.router.api.key`、`YuCLI.router.timeout.seconds`、`YuCLI.router.confidence.threshold`、`YuCLI.router.failure.cooldown.seconds`
+2. 环境变量 / `.env`：`YUCLI_ROUTER_ENABLED`、`YUCLI_ROUTER_BASE_URL`、`YUCLI_ROUTER_MODEL`、`YUCLI_ROUTER_API_KEY`、`YUCLI_ROUTER_TIMEOUT_SECONDS`、`YUCLI_ROUTER_CONFIDENCE_THRESHOLD`、`YUCLI_ROUTER_FAILURE_COOLDOWN_SECONDS`
+3. 默认值：关闭 / `http://localhost:11434/v1` / `qwen2.5:7b` / `ollama` / `8` / `0.55` / `60`
+
+启用后，`LocalIntentRouter` 会调用本地 OpenAI-compatible `/v1/chat/completions` 服务，让 LoRA 小模型只输出 JSON 意图分类（是否需要写文件、命令、联网、浏览器、MCP、插件、risk、confidence）。它只影响 `ToolRegistry.getToolDefinitions(prompt)` 暴露哪些工具 schema，不参与最终回答、不直接执行危险操作；接口失败、低置信度或超时时会自动回退关键词规则，并短暂熔断避免每轮拖慢。
 
 Web 搜索 provider 配置读取顺序（以代码实际行为为准）：
 
@@ -202,14 +220,18 @@ EvalHarness 当前读取 `src/test/resources/eval/cases.json`，支持 `mode=rea
 - 主入口在 `src/main/java/com/yucli/agent/Agent.java`
 - 维护对话历史
 - 退出条件由 LLM 自决：只要它不再返回 `tool_calls`、直接给出 `content`，循环就结束
-- `AgentBudget`（`src/main/java/com/yucli/agent/AgentBudget.java`）只承担保险阀职责，三种兜底任一命中即收尾：
-  - 累计 `inputTokens + outputTokens` 超过 token 预算（默认 300_000）
+- `AgentBudget`（`src/main/java/com/yucli/agent/AgentBudget.java`）只承担保险阀职责，四种兜底任一命中即收尾：
+  - 上一轮原始 `inputTokens` 接近当前模型上下文窗口水位（默认 `maxContextWindow() * 0.92`）
+  - 累计有效 token（`inputTokens - cachedTokens + outputTokens`）超过任务预算（默认 258_000）
   - 连续 N 轮（默认 3）出现完全相同的工具名 + 参数，判定为死循环
   - 累计轮数超过硬上限（默认 50），最终防御
 - 不再使用"固定最多 10 轮"的策略；新代码改动前阅读 `AgentBudget` 的注释比读老 README 更可靠
 - 支持工具调用后继续思考
-- 用户默认看到的是流式输出的模型 `reasoning_content`（如果接口返回）和回复内容；ReAct 同一次用户输入只打印一次 `🧠 思考过程` 标题，工具调用前后的后续推理继续归在同一块下；ReAct 流式头标签使用 `🤖 回复`（而非 `最终结果`，避免在模型调用工具前先 narrate 时误导用户）；Plan 阶段同样走流式展示；终端会先渲染常见 Markdown 再输出；工具参数、工具返回片段、Token 使用量不再作为默认用户输出
+- 用户默认看到的是流式输出的模型 `reasoning_content`（如果接口返回）和回复内容；ReAct 同一次用户输入只打印一次 `🧠 思考过程` 标题，工具调用前后的后续推理继续归在同一块下；ReAct 流式头标签使用 `🤖 回复`（而非 `最终结果`，避免在模型调用工具前先 narrate 时误导用户）；Plan 阶段同样走流式展示；终端会先渲染常见 Markdown 再输出；工具参数、工具返回片段不再作为默认用户输出；性能面板会展示 input/output/cached token、有效预算、耗时和本轮暴露工具数
 - 会写入短期记忆
+- 为提升 prompt cache 命中率，长期记忆检索结果会拼入当前 user payload，不再每轮改写 system prompt；system prompt 只在 MCP/Skill 元数据或上下文模式变化时刷新
+- ReAct、Plan 和 SubAgent 执行路径都会使用 prompt-scoped tool definitions：默认只暴露 `read_file` / `list_dir` / `search_code`，写入、命令、联网、浏览器、MCP 和插件工具按用户输入意图或 profile 白名单加入；无参 `ToolRegistry.getToolDefinitions()` 仍返回全量工具供测试/集成使用
+- 如果启用 `YUCLI_ROUTER_ENABLED=true`，工具意图选择会先尝试本地 LoRA router；router 只做分类/打分，结果会和保守关键词规则合并，最终仍由策略层、权限、HITL、hooks 决定是否允许执行
 
 ### 2. Plan-and-Execute 模式
 
@@ -853,10 +875,10 @@ src/main/java/com/yucli
 
 当前内置工具有 16 个：
 
-- `read_file`
+- `read_file`（支持 `start_line` / `end_line` / `max_chars`，默认最多约 24k 字符，最大 80k；超出会提示继续分页读取）
 - `write_file`
-- `list_dir`
-- `execute_command`（在当前项目目录执行短时命令，默认 60 秒超时，不允许扫描 `/`、`~` 或整个文件系统）
+- `list_dir`（默认最多返回 200 个条目，超出会提示缩小目录范围）
+- `execute_command`（在当前项目目录执行短时命令，默认 60 秒超时，不允许扫描 `/`、`~` 或整个文件系统；输出最多约 8k 字符，截断时保留头尾）
 - `create_project`
 - `search_code`
 - `web_search`（通过 `SearchProvider` 抽象，支持 zhipu / serpapi / searxng 三种实现；provider 未就绪时返回引导提示而非抛错）
@@ -881,6 +903,7 @@ src/main/java/com/yucli
 - `ToolInvocation`：封装一次工具调用的 id、工具名与 JSON 参数
 - `ToolExecutionResult`：封装工具结果、耗时与是否超时
 - `executeTools(List<ToolInvocation>)`：并行执行同一批工具调用，并按输入顺序返回结果
+- MCP / plugin / built-in 工具结果进入 LLM 历史前会经过统一限长，默认保留头尾约 24k 字符
 
 ### `src/main/java/com/yucli/mcp/`
 
