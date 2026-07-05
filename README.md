@@ -415,7 +415,26 @@ YuCLI 在 `examples/` 下提供可复制的生态样板：
 
 ## 沙箱边界
 
-YuCLI 当前已经有工具级 scope、路径围栏、命令拦截、HITL、hooks、审计日志，以及 SubAgent `allowedPaths` / `allowedCommands` 策略。它还没有把每个 SubAgent 或命令放进真正的进程级 filesystem sandbox，例如 container、gVisor 或 microVM。这仍属于更大的运行时隔离路线，和上面的 plugin / MCP / Skill 生态模板是两条不同工作线。
+YuCLI 当前已经有工具级 scope、路径围栏、命令拦截、HITL、hooks、审计日志，以及 SubAgent `allowedPaths` / `allowedCommands` 策略。
+
+`execute_command` 现在支持可选 Docker 进程沙箱，默认关闭。开启后，命令会通过 `docker run --rm` 在容器里执行，项目目录挂载到 `/workspace`，容器默认 `--network none`，超时或取消时会尝试 `docker rm -f` 清理容器：
+
+```bash
+YUCLI_SANDBOX_ENABLED=true
+YUCLI_SANDBOX_DOCKER_IMAGE=maven:3.9-eclipse-temurin-17
+YUCLI_SANDBOX_NETWORK=none
+YUCLI_SANDBOX_MOUNT=rw
+```
+
+对应系统属性：
+
+```bash
+java -DYuCLI.sandbox.enabled=true \
+     -DYuCLI.sandbox.docker.image=maven:3.9-eclipse-temurin-17 \
+     -jar target/yucli-19.0.0.jar
+```
+
+边界：Docker sandbox 是实用级进程/文件系统隔离，不等同于 microVM。`rw` 挂载时命令仍可修改当前项目目录；`ro` 更安全，但会让 `mvn test`、构建输出、代码生成类任务失败。更强的 gVisor / Firecracker / per-SubAgent 独立文件系统仍属于后续 runtime isolation 路线。
 
 ## License
 

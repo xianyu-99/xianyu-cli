@@ -314,11 +314,12 @@ EvalHarness 当前读取 `src/test/resources/eval/cases.json`，支持 `mode=rea
 
 #### 7.1 HITL 增强：路径围栏 / 命令快速拒绝 / 操作审计
 
-HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是沙箱、不提供进程隔离。主模块在 `src/main/java/com/yucli/policy/`：
+HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层。路径围栏 / 命令黑名单不是沙箱；真正的可选命令进程隔离见下方 Docker sandbox。主模块在 `src/main/java/com/yucli/policy/`：
 
 - `PathGuard`：`read_file` / `write_file` / `list_dir` / `create_project` 在执行前必须经过它，强制把路径限定在项目根之内。处理三类越界——绝对路径外逃、`..` 穿越、符号链接逃逸（向上找最近存在祖先做 `Files.toRealPath`，再把剩余段接回）
 - `CommandGuard`：`execute_command` 进入 HITL 之前的 fast-fail 黑名单（sudo / rm -rf 全盘 / mkfs / dd of=/dev / fork bomb / curl|sh / find / / chmod 777 / / shutdown）。**定位是辅助 HITL，不是主防线**——黑名单永远列不全（base64 解码后执行、`eval`、写 `~/.bashrc` 持久化等都漏），它只是减少 HITL 弹窗骚扰。真正的安全责任在 HITL 审批
 - `ResourceLimit` 类约束：`write_file` 单文件 5MB；`execute_command` 60 秒超时 + 8KB 输出截断（与第 7 期共用）
+- `CommandSandboxDriver`：`execute_command` 支持可选 Docker sandbox，默认关闭。启用后 `ToolRegistry` 在通过 HITL / hooks / PermissionProfile / CommandGuard 后，把命令交给 `docker run --rm` 执行；项目目录挂载到容器 `/workspace`，默认镜像 `maven:3.9-eclipse-temurin-17`，默认 `--network none`，默认挂载 `rw`，超时/取消时尝试 `docker rm -f` 清理容器。配置读取系统属性、环境变量和 `.env`：`YuCLI.sandbox.enabled` / `YUCLI_SANDBOX_ENABLED`、`YuCLI.sandbox.docker.image` / `YUCLI_SANDBOX_DOCKER_IMAGE`、`YuCLI.sandbox.docker.network` / `YUCLI_SANDBOX_NETWORK`、`YuCLI.sandbox.docker.mount` / `YUCLI_SANDBOX_MOUNT`、`YuCLI.sandbox.docker.memory` / `YUCLI_SANDBOX_MEMORY`、`YuCLI.sandbox.docker.cpus` / `YUCLI_SANDBOX_CPUS`
 - `AuditLog`：危险工具（`write_file` / `execute_command` / `create_project`）调用一律落一行 JSONL 到 `~/.YuCLI/audit/audit-YYYY-MM-DD.jsonl`，字段：`timestamp / tool / args / outcome (allow|deny|error) / reason / approver (hitl|policy|none) / durationMs`。审计写入失败仅 stderr 提示，不影响主流程
 - `PermissionProfile`：读取 `~/.YuCLI/permissions.json` 和 `.YuCLI/permissions.json`，支持 `allow` / `deny` / `ask` 规则；`deny` 优先级最高，`allow` 会跳过 HITL，`ask` 或未命中规则继续交给 HITL / 默认策略处理；matcher 支持精确工具名、`*`、前缀通配和 `tool:argument-substring`
 - 拦截出口：`PathGuard` / `CommandGuard` / 文件大小限制 都抛 `PolicyException`（`RuntimeException` 子类），由 `ToolRegistry.executeTool` 统一 catch、写 deny 审计、返回 `🛡️ 策略拒绝: ...`
@@ -328,7 +329,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `/permissions`：查看当前权限 Profile 规则和来源
   - `/audit [N]`：看今日最近 N 条审计（默认 10，最大 100）
 - 提示词联动：`Agent` / `PlanExecuteAgent` / `SubAgent` 三处都告知 LLM 安全策略硬规则与 `🛡️ 策略拒绝` 输出格式，避免 LLM 原样重试同一条违规请求
-- **不做沙箱的取舍**：本地 Agent CLI（参考 Claude Code / Cursor / Aider）默认都不做容器/VM 沙箱——沙箱削弱 Agent 能力（不能装依赖、不能跑全局命令）、给虚假安全感（容器逃逸真实存在）、体验更差。生产级 Agent 沙箱实际是 microVM-level（Devin / Modal / Anthropic Computer Use 用 Firecracker / gVisor），不是 Docker-level。想做隔离请参考 ROADMAP 末尾「Pro 升级版本」
+- **沙箱边界**：Docker sandbox 是实用级进程/文件系统隔离，不等同于 microVM；`rw` 挂载时仍可修改当前项目目录，`ro` 更安全但会让构建、测试输出、代码生成类任务失败。更强的 gVisor / Firecracker / per-SubAgent 独立文件系统仍属于后续 runtime isolation 路线。
 
 #### 7.2 可配置 Hooks
 
@@ -646,9 +647,15 @@ src/main/java/com/yucli
 │   ├── YuPlugin.java
 │   ├── PluginContext.java
 │   ├── PluginManager.java
+│   ├── PluginTemplateGenerator.java
 │   ├── PluginState.java
 │   ├── PluginInfo.java
 │   └── ToolExecutor.java
+├── sandbox/
+│   ├── SandboxConfig.java
+│   ├── CommandSandboxDriver.java
+│   ├── CommandProcessSpec.java
+│   └── DockerSandboxDriver.java
 ├── session/
 │   ├── Session.java
 │   ├── SessionMessage.java
@@ -734,7 +741,8 @@ src/main/java/com/yucli
 - `HookDefinitionTest`、`HookConfigLoaderTest`、`HookHttpClientTest`、`HookManagerDecisionTest`、`ToolRegistryHookTest`、`ScopedToolRegistryTest`
 - `CheckpointManagerTest`
 - `HeadlessRunnerTest`
-- `ToolRegistryTest`
+- `ToolRegistryTest`、`ToolRegistrySandboxTest`
+- `SandboxConfigTest`、`DockerSandboxDriverTest`
 - `McpSchemaSanitizerTest`、`McpConfigLoaderTest`、`JsonRpcClientTest`、`McpClientTest`、`McpToolRegistrationTest`、`McpResourceCacheTest`、`AtMentionParserTest`、`AtMentionExpanderTest`、`AtMentionCompleterTest`、`NotificationRouterTest`
 - `PathGuardTest`、`CommandGuardTest`、`AuditLogTest`、`PermissionProfileTest`、`PermissionProfileLoaderTest`
 - `TokenStoreTest`、`McpOAuthClientTest`
@@ -876,7 +884,7 @@ src/main/java/com/yucli
 下面这些内容在路线图里出现了，但当前仓库还没有真正交付：
 
 - 持久化后台任务队列 / 跨会话异步长任务调度
-- 容器 / VM 沙箱：本地 Agent CLI 默认不做容器隔离（参考 Claude Code / Cursor / Aider）；想做隔离请参考 ROADMAP 末尾「Pro 升级版本」或自行实现 `SandboxDriver` 接口
+- runtime isolation：`execute_command` 已有默认关闭的 Docker sandbox driver；但还没有 gVisor / Firecracker / microVM，也没有每个 SubAgent 独立 filesystem 镜像和持久工作区
 - Chrome DevTools MCP 已知边界：
   - 需要本地安装 Chrome/Chromium（自动查找系统安装，Windows/macOS/Linux 均支持，Edge 兜底）
   - 无头模式下部分网站可能有反爬检测

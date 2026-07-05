@@ -13,6 +13,8 @@ import com.yucli.rag.CodeRetriever;
 import com.yucli.rag.SearchResultFormatter;
 import com.yucli.rag.VectorStore;
 import com.yucli.browser.BrowserToolProvider;
+import com.yucli.sandbox.CommandProcessSpec;
+import com.yucli.sandbox.CommandSandboxDriver;
 import com.yucli.policy.AuditLog;
 import com.yucli.policy.CommandGuard;
 import com.yucli.policy.PathGuard;
@@ -77,6 +79,7 @@ public class ToolRegistry {
     private PermissionProfile permissionProfile = PermissionProfile.defaultProfile();
     private CheckpointManager checkpointManager;
     private Path checkpointRootOverride;
+    private CommandSandboxDriver commandSandboxDriver = CommandSandboxDriver.fromEnvironment();
 
     public ToolRegistry() {
         this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS, HookManager.disabled());
@@ -138,6 +141,16 @@ public class ToolRegistry {
 
     public PermissionProfile getPermissionProfile() {
         return permissionProfile;
+    }
+
+    public void setCommandSandboxDriver(CommandSandboxDriver commandSandboxDriver) {
+        this.commandSandboxDriver = commandSandboxDriver == null
+                ? CommandSandboxDriver.fromConfig(com.yucli.sandbox.SandboxConfig.disabled())
+                : commandSandboxDriver;
+    }
+
+    public String commandSandboxStatus() {
+        return commandSandboxDriver == null ? "disabled" : commandSandboxDriver.statusText();
     }
 
     public void enableCheckpointing() {
@@ -984,9 +997,13 @@ public class ToolRegistry {
         });
 
         Process process = null;
+        CommandProcessSpec processSpec = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder(shellCommand(normalized));
-            pb.directory(new File(projectPath));
+            processSpec = commandProcessSpec(normalized);
+            ProcessBuilder pb = new ProcessBuilder(processSpec.commandLine());
+            if (processSpec.workingDirectory() != null) {
+                pb.directory(processSpec.workingDirectory().toFile());
+            }
             pb.redirectErrorStream(true);
             process = pb.start();
 
@@ -998,6 +1015,7 @@ public class ToolRegistry {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
                 outputFuture.cancel(true);
+                cleanupSandboxProcess(processSpec);
                 return "命令执行超时（" + commandTimeoutSeconds + "秒），已强制终止";
             }
 
@@ -1009,14 +1027,41 @@ public class ToolRegistry {
             if (process != null) {
                 process.destroyForcibly();
             }
+            cleanupSandboxProcess(processSpec);
             return "用户取消了此次工具调用";
         } catch (Exception e) {
             if (process != null) {
                 process.destroyForcibly();
             }
+            cleanupSandboxProcess(processSpec);
             return "执行命令失败: " + e.getMessage();
         } finally {
             outputReaderExecutor.shutdownNow();
+        }
+    }
+
+    private CommandProcessSpec commandProcessSpec(String normalizedCommand) {
+        if (commandSandboxDriver != null && commandSandboxDriver.enabled()) {
+            return commandSandboxDriver.createProcessSpec(normalizedCommand, pathGuard.getRootPath());
+        }
+        return new CommandProcessSpec(shellCommand(normalizedCommand), pathGuard.getRootPath(), List.of(), "local");
+    }
+
+    private void cleanupSandboxProcess(CommandProcessSpec processSpec) {
+        if (processSpec == null || processSpec.cleanupCommand().isEmpty()) {
+            return;
+        }
+        Process cleanup = null;
+        try {
+            cleanup = new ProcessBuilder(processSpec.cleanupCommand())
+                    .redirectErrorStream(true)
+                    .start();
+            cleanup.waitFor(5, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+        } finally {
+            if (cleanup != null && cleanup.isAlive()) {
+                cleanup.destroyForcibly();
+            }
         }
     }
 
