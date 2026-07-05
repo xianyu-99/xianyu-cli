@@ -1414,7 +1414,7 @@ public class Main {
                 "输入 '/save 事实内容' 手动保存关键事实",
                 "输入 '/session' 查看会话列表，'/session save' 保存当前会话，'/session load|delete|export <id>' 加载/删除/导出会话",
                 "输入 '/resume' 恢复上次未完成的会话",
-                "输入 '/exit' 或 '/quit' 退出"
+                "输入 '/exit'、'exit'、'q' 或 '退出' 退出"
         );
     }
 
@@ -1770,7 +1770,7 @@ public class Main {
         System.out.println(styleBanner("  ╚██╔╝  ██║   ██║██║     ██║     ██║"));
         System.out.println(styleBanner("   ██║   ╚██████╔╝╚██████╗███████╗██║"));
         System.out.println(styleBanner("   ╚═╝    ╚═════╝  ╚═════╝╚══════╝╚═╝"));
-        System.out.println(styleDim("输入消息开始对话   ·   /help 查看命令   ·   /exit 退出"));
+        System.out.println(styleDim("输入消息开始对话   ·   /help 查看命令   ·   /exit / exit / q 退出"));
         System.out.println();
     }
 

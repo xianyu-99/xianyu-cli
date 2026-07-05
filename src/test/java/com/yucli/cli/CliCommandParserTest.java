@@ -40,6 +40,17 @@ class CliCommandParserTest {
     }
 
     @Test
+    void parsesExitAliasesBeforeSendingToAgent() {
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("exit").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("quit").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("q").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("bye").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("exiy").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("\u9000\u51fa").type());
+        assertEquals(CliCommandParser.CommandType.EXIT, CliCommandParser.parse("\u518d\u89c1").type());
+    }
+
+    @Test
     void parsesMemorySlashCommand() {
         CliCommandParser.ParsedCommand command = CliCommandParser.parse("/memory");
 

@@ -76,10 +76,7 @@ final class CliCommandParser {
             return ParsedCommand.none();
         }
 
-        if (trimmed.equalsIgnoreCase("/exit")
-                || trimmed.equalsIgnoreCase("/quit")
-                || trimmed.equalsIgnoreCase("exit")
-                || trimmed.equalsIgnoreCase("quit")) {
+        if (isExitCommand(trimmed)) {
             return new ParsedCommand(CommandType.EXIT, null);
         }
 
@@ -339,5 +336,17 @@ final class CliCommandParser {
         }
 
         return ParsedCommand.none();
+    }
+
+    private static boolean isExitCommand(String trimmed) {
+        return trimmed.equalsIgnoreCase("/exit")
+                || trimmed.equalsIgnoreCase("/quit")
+                || trimmed.equalsIgnoreCase("exit")
+                || trimmed.equalsIgnoreCase("quit")
+                || trimmed.equalsIgnoreCase("q")
+                || trimmed.equalsIgnoreCase("bye")
+                || trimmed.equalsIgnoreCase("exiy")
+                || trimmed.equals("\u9000\u51fa")
+                || trimmed.equals("\u518d\u89c1");
     }
 }

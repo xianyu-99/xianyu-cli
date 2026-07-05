@@ -10,7 +10,7 @@ YuCLI  v19.0.0  session=local  ready
   ╚██╔╝  ██║   ██║██║     ██║     ██║
    ██║   ╚██████╔╝╚██████╗███████╗██║
    ╚═╝    ╚═════╝  ╚═════╝╚══════╝╚═╝
-输入消息开始对话   ·   /help 查看命令   ·   /exit 退出
+输入消息开始对话   ·   /help 查看命令   ·   /exit / exit / q 退出
 ```
 
 ## 快速开始
@@ -175,7 +175,7 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 | `/skill list\|on\|off` | 管理 Skill |
 | `/tui` | 终端图形界面 |
 | `/clear` | 清空对话历史 |
-| `/exit` | 退出 |
+| `/exit` / `exit` / `q` / `退出` | 退出 |
 
 ## MCP 配置
 

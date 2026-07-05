@@ -348,7 +348,7 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层。路径�
 - 当前支持事件：
   - `PreToolUse`：工具执行前触发；hook 命令非 0、HTTP 非 2xx、超时、执行失败或结构化 `deny` 会阻断本次工具调用，返回 `[Hook] PreToolUse 拒绝: ...`
   - `PostToolUse`：工具执行后触发；失败只向 stderr 打印警告，不改变工具结果
-  - `UserPromptSubmit`：用户输入提交给 Agent 前触发；只对真正会运行 Agent 的输入触发，不拦 `/clear`、`/hooks`、`/exit` 等内部命令；支持 `deny` / `modify`，`modify.arguments.prompt` 会替换后续输入
+  - `UserPromptSubmit`：用户输入提交给 Agent 前触发；只对真正会运行 Agent 的输入触发，不拦 `/clear`、`/hooks`、`/exit`、`exit`、`q`、`退出` 等内部命令；支持 `deny` / `modify`，`modify.arguments.prompt` 会替换后续输入
   - `AgentStart` / `AgentFinish`：ReAct、Plan、Team 顶层 run 生命周期；warning-only
   - `SubAgentStart` / `SubAgentFinish`：Planner / Worker / Reviewer 子代理生命周期；warning-only
   - `PreCompact`：短期记忆压缩前触发；warning-only，失败不阻断压缩
