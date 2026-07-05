@@ -56,7 +56,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1
     "openai": {
       "apiKey": "your-key",
       "baseUrl": "https://api.openai.com/v1",
-      "model": "gpt-4o"
+      "model": "gpt-4o",
+      "wireApi": "responses",
+      "reasoningEffort": "xhigh"
     }
   }
 }
@@ -71,7 +73,11 @@ export ANTHROPIC_API_KEY=your-key
 # QWEN_API_KEY=your-key
 # QWEN_REASONING_EFFORT=high
 # OPENAI_API_KEY=your-key
-# OPENAI_REASONING_EFFORT=high
+# OPENAI_BASE_URL=https://api-us.popcorn.wiki/
+# OPENAI_MODEL=gpt-5.5
+# OPENAI_WIRE_API=responses
+# OPENAI_REASONING_EFFORT=xhigh
+# YUCLI_DEFAULT_PROVIDER=openai
 ```
 
 ### 运行

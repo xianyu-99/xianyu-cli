@@ -69,6 +69,15 @@ class YuCLIConfigTest {
         }
 
         @Test
+        @DisplayName("5-arg constructor sets reasoning effort and wire API")
+        void fiveArgConstructor() {
+            YuCLIConfig.ProviderConfig pc =
+                    new YuCLIConfig.ProviderConfig("sk-xxx", "https://api.example.com", "gpt-4", "XHigh", "Responses");
+            assertEquals("XHigh", pc.getReasoningEffort());
+            assertEquals("Responses", pc.getWireApi());
+        }
+
+        @Test
         @DisplayName("No-arg constructor leaves fields null")
         void noArgConstructor() {
             YuCLIConfig.ProviderConfig pc = new YuCLIConfig.ProviderConfig();
@@ -85,9 +94,13 @@ class YuCLIConfigTest {
             pc.setApiKey("new-key");
             pc.setBaseUrl("https://new.example.com");
             pc.setModel("new-model");
+            pc.setReasoningEffort("max");
+            pc.setWireApi("responses");
             assertEquals("new-key", pc.getApiKey());
             assertEquals("https://new.example.com", pc.getBaseUrl());
             assertEquals("new-model", pc.getModel());
+            assertEquals("max", pc.getReasoningEffort());
+            assertEquals("responses", pc.getWireApi());
         }
     }
 
@@ -127,6 +140,15 @@ class YuCLIConfigTest {
         config.getProviders().put("anthropic",
                 new YuCLIConfig.ProviderConfig("ant-key", "https://api.example.com", "gpt-5.5", "XHigh"));
         assertEquals("xhigh", config.getReasoningEffort("anthropic"));
+    }
+
+    @Test
+    @DisplayName("getWireApi returns normalized map value when provider is present")
+    void getWireApi_providerInMap() {
+        YuCLIConfig config = new YuCLIConfig();
+        config.getProviders().put("openai",
+                new YuCLIConfig.ProviderConfig("sk-test", "https://api.example.com", "gpt-5.5", "xhigh", "Responses"));
+        assertEquals("responses", config.getWireApi("openai"));
     }
 
     // ── getApiKey / getModel / getBaseUrl with provider NOT in map ───
@@ -194,6 +216,24 @@ class YuCLIConfigTest {
                 java.util.List.of("ANTHROPIC_REASONING_EFFORT", "ANTHROPIC_MODEL_REASONING_EFFORT",
                         "MODEL_REASONING_EFFORT", "YUCLI_REASONING_EFFORT"),
                 YuCLIConfig.reasoningEffortEnvKeys("anthropic")
+        );
+    }
+
+    @Test
+    @DisplayName("Wire API accepts provider-specific and generic aliases")
+    void wireApiEnvKeys_includeAliases() {
+        assertEquals(
+                java.util.List.of("OPENAI_WIRE_API", "OPENAI_WIRE", "MODEL_WIRE_API", "YUCLI_WIRE_API"),
+                YuCLIConfig.wireApiEnvKeys("openai")
+        );
+    }
+
+    @Test
+    @DisplayName("Default provider accepts YuCLI and model aliases")
+    void defaultProviderEnvKeys_includeAliases() {
+        assertEquals(
+                java.util.List.of("YUCLI_DEFAULT_PROVIDER", "MODEL_PROVIDER"),
+                YuCLIConfig.defaultProviderEnvKeys()
         );
     }
 

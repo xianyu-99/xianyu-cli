@@ -19,12 +19,25 @@ public class LlmClientFactory {
 
         String baseUrl = config.getBaseUrl(normalized);
         String reasoningEffort = config.getReasoningEffort(normalized);
+        String wireApi = config.getWireApi(normalized);
 
         return switch (normalized) {
             case "glm" -> new GLMClient(apiKey, baseUrl, model, reasoningEffort);
             case "deepseek" -> new DeepSeekClient(apiKey, baseUrl, model, reasoningEffort);
             case "anthropic" -> new AnthropicClient(baseUrl, apiKey, model, reasoningEffort);
-            case "openai" -> new OpenAiCompatibleClient(
+            case "openai" -> "responses".equals(wireApi)
+                    ? new OpenAiResponsesClient(
+                            "openai",
+                            baseUrl,
+                            apiKey,
+                            model,
+                            "https://api.openai.com/v1",
+                            "gpt-4o",
+                            128_000,
+                            false,
+                            reasoningEffort
+                    )
+                    : new OpenAiCompatibleClient(
                     "openai",
                     baseUrl,
                     apiKey,
@@ -51,7 +64,7 @@ public class LlmClientFactory {
     }
 
     public static LlmClient createFromConfig(YuCLIConfig config) {
-        LlmClient client = create(config.getDefaultProvider(), config);
+        LlmClient client = create(config.getEffectiveDefaultProvider(), config);
         if (client != null) {
             return client;
         }

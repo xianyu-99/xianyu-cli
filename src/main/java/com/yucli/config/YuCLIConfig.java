@@ -30,6 +30,7 @@ public class YuCLIConfig {
         private String baseUrl;
         private String model;
         private String reasoningEffort;
+        private String wireApi;
 
         public ProviderConfig() {}
 
@@ -44,6 +45,11 @@ public class YuCLIConfig {
             this.reasoningEffort = reasoningEffort;
         }
 
+        public ProviderConfig(String apiKey, String baseUrl, String model, String reasoningEffort, String wireApi) {
+            this(apiKey, baseUrl, model, reasoningEffort);
+            this.wireApi = wireApi;
+        }
+
         public String getApiKey() { return apiKey; }
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getBaseUrl() { return baseUrl; }
@@ -52,12 +58,22 @@ public class YuCLIConfig {
         public void setModel(String model) { this.model = model; }
         public String getReasoningEffort() { return reasoningEffort; }
         public void setReasoningEffort(String reasoningEffort) { this.reasoningEffort = reasoningEffort; }
+        public String getWireApi() { return wireApi; }
+        public void setWireApi(String wireApi) { this.wireApi = wireApi; }
     }
 
     public String getDefaultProvider() { return defaultProvider; }
     public void setDefaultProvider(String defaultProvider) { this.defaultProvider = defaultProvider; }
     public Map<String, ProviderConfig> getProviders() { return providers; }
     public void setProviders(Map<String, ProviderConfig> providers) { this.providers = providers; }
+
+    public String getEffectiveDefaultProvider() {
+        String provider = loadDefaultProviderFromEnv();
+        if (provider != null && !provider.isBlank()) {
+            return provider.toLowerCase();
+        }
+        return defaultProvider;
+    }
 
     public String getApiKey(String provider) {
         ProviderConfig providerConfig = providers.get(provider);
@@ -90,6 +106,14 @@ public class YuCLIConfig {
             return normalizeReasoningEffort(providerConfig.getReasoningEffort());
         }
         return loadReasoningEffortFromEnv(provider);
+    }
+
+    public String getWireApi(String provider) {
+        ProviderConfig providerConfig = providers.get(provider);
+        if (providerConfig != null && providerConfig.getWireApi() != null && !providerConfig.getWireApi().isBlank()) {
+            return normalizeWireApi(providerConfig.getWireApi());
+        }
+        return loadWireApiFromEnv(provider);
     }
 
     public static YuCLIConfig load() {
@@ -173,6 +197,44 @@ public class YuCLIConfig {
         return null;
     }
 
+    private static String loadWireApiFromEnv(String provider) {
+        List<String> envKeys = wireApiEnvKeys(provider);
+
+        for (String envKey : envKeys) {
+            String envValue = System.getenv(envKey);
+            if (envValue != null && !envValue.isBlank()) {
+                return normalizeWireApi(envValue);
+            }
+        }
+
+        for (String envKey : envKeys) {
+            String dotEnvValue = readFromDotEnv(envKey);
+            if (dotEnvValue != null && !dotEnvValue.isBlank()) {
+                return normalizeWireApi(dotEnvValue);
+            }
+        }
+
+        return null;
+    }
+
+    private static String loadDefaultProviderFromEnv() {
+        for (String envKey : defaultProviderEnvKeys()) {
+            String envValue = System.getenv(envKey);
+            if (envValue != null && !envValue.isBlank()) {
+                return envValue.trim();
+            }
+        }
+
+        for (String envKey : defaultProviderEnvKeys()) {
+            String dotEnvValue = readFromDotEnv(envKey);
+            if (dotEnvValue != null && !dotEnvValue.isBlank()) {
+                return dotEnvValue.trim();
+            }
+        }
+
+        return null;
+    }
+
     static List<String> reasoningEffortEnvKeys(String provider) {
         String prefix = provider.toUpperCase();
         return switch (provider.toLowerCase()) {
@@ -183,7 +245,23 @@ public class YuCLIConfig {
         };
     }
 
+    static List<String> wireApiEnvKeys(String provider) {
+        String prefix = provider.toUpperCase();
+        return List.of(prefix + "_WIRE_API", prefix + "_WIRE", "MODEL_WIRE_API", "YUCLI_WIRE_API");
+    }
+
+    static List<String> defaultProviderEnvKeys() {
+        return List.of("YUCLI_DEFAULT_PROVIDER", "MODEL_PROVIDER");
+    }
+
     private static String normalizeReasoningEffort(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().toLowerCase();
+    }
+
+    private static String normalizeWireApi(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }

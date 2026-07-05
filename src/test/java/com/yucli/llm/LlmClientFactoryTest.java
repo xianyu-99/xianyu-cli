@@ -87,12 +87,33 @@ class LlmClientFactoryTest {
 
     @Test
     void create_openai_returnsOpenAiCompatibleClient() {
-        YuCLIConfig config = configWith("openai", "sk-test", "https://api.example.com/v1", "gpt-test");
+        YuCLIConfig config = new YuCLIConfig();
+        config.getProviders().put("openai",
+                new YuCLIConfig.ProviderConfig("sk-test", "https://api.example.com/v1", "gpt-test",
+                        null, "chat_completions"));
+
         LlmClient client = LlmClientFactory.create("openai", config);
+
         assertNotNull(client);
         assertInstanceOf(OpenAiCompatibleClient.class, client);
         assertEquals("openai", client.getProviderName());
         assertEquals("gpt-test", client.getModelName());
+    }
+
+    @Test
+    void create_openaiResponsesWire_returnsOpenAiResponsesClient() {
+        YuCLIConfig config = new YuCLIConfig();
+        config.getProviders().put("openai",
+                new YuCLIConfig.ProviderConfig("sk-test", "https://api.example.com/v1", "gpt-test",
+                        "xhigh", "responses"));
+
+        LlmClient client = LlmClientFactory.create("openai", config);
+
+        assertNotNull(client);
+        assertInstanceOf(OpenAiResponsesClient.class, client);
+        assertEquals("openai", client.getProviderName());
+        assertEquals("gpt-test", client.getModelName());
+        assertEquals("xhigh", client.getReasoningEffort());
     }
 
     @Test

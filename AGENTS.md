@@ -35,12 +35,12 @@
 
 - Java 17+
 - Maven
-- 可用的默认模型 API Key：`ANTHROPIC_API_KEY`（默认 provider 为 `anthropic`，默认 DeepSeek Anthropic 兼容端点）；也兼容 Claude Code 常用的 `ANTHROPIC_AUTH_TOKEN`
+- 可用的默认模型 API Key：`ANTHROPIC_API_KEY`（默认 provider 为 `anthropic`，默认 DeepSeek Anthropic 兼容端点）；也兼容 Claude Code 常用的 `ANTHROPIC_AUTH_TOKEN`。如需默认使用通用 OpenAI provider，可设置 `YUCLI_DEFAULT_PROVIDER=openai`
 - 可选模型 Key：`GLM_API_KEY`、`DEEPSEEK_API_KEY`、`QWEN_API_KEY`、`OPENAI_API_KEY`
 
 模型配置当前读取顺序以代码为准：
 
-1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl` / `reasoningEffort`
+1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl` / `reasoningEffort` / `wireApi`
 2. 环境变量：`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `OPENAI_API_KEY` 等
 3. 仓库当前目录下的 `.env`
 4. 用户主目录下的 `.env`
@@ -62,6 +62,7 @@ ANTHROPIC_API_KEY=your_api_key_here
 # OPENAI_API_KEY=your_openai_compatible_key_here
 # OPENAI_BASE_URL=https://api.openai.com/v1
 # OPENAI_MODEL=gpt-4o
+# OPENAI_WIRE_API=responses
 # OPENAI_REASONING_EFFORT=high
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text:latest
@@ -122,7 +123,14 @@ Reasoning effort 配置读取顺序（以代码实际行为为准）：
 3. 通用环境变量 / `.env`：`MODEL_REASONING_EFFORT`、`YUCLI_REASONING_EFFORT`
 4. 未配置时不发送 `reasoning_effort` 字段，由服务端默认决定
 
-当前 Anthropic Messages wire 和 OpenAI-compatible Chat Completions wire 都会在配置存在时发送顶层 `reasoning_effort`。常见值包括 `low` / `medium` / `high` / `xhigh` / `max`，具体是否生效以所接入网关为准；CLI 启动和 `/model` 会显示当前读取到的值。
+当前 Anthropic Messages wire 和 OpenAI-compatible Chat Completions wire 都会在配置存在时发送顶层 `reasoning_effort`；OpenAI Responses wire 会发送 `reasoning.effort`。常见值包括 `low` / `medium` / `high` / `xhigh` / `max`，具体是否生效以所接入网关为准；CLI 启动和 `/model` 会显示当前读取到的值。
+
+OpenAI wire 配置读取顺序：
+
+1. `~/.YuCLI/config.json` 中对应 provider 的 `wireApi`
+2. provider 专属环境变量 / `.env`：`OPENAI_WIRE_API`、`OPENAI_WIRE`
+3. 通用环境变量 / `.env`：`MODEL_WIRE_API`、`YUCLI_WIRE_API`
+4. 未配置时默认使用 Chat Completions wire；配置为 `responses` 时使用 `/v1/responses`
 
 Web 搜索 provider 配置读取顺序（以代码实际行为为准）：
 
@@ -890,6 +898,7 @@ src/main/java/com/yucli
 
 - `AnthropicClient`：Anthropic Messages wire，默认用于 DeepSeek Anthropic 兼容端点
 - `AbstractOpenAiCompatibleClient`：OpenAI Chat Completions wire 的共用流式解析，负责消息、`reasoning_content`、tools、tool_calls、usage 解析
+- `OpenAiResponsesClient`：OpenAI Responses wire，负责 `/v1/responses` 流式解析，并用 `reasoning.effort` 传递推理强度
 - `DeepSeekClient` / `GLMClient` / `OpenAiCompatibleClient`：分别接入 DeepSeek、GLM、Qwen、通用 OpenAI-compatible provider；`*_BASE_URL` 可覆盖默认 endpoint
 
 ### `src/main/resources/logback.xml`
