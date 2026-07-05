@@ -3,6 +3,7 @@ package com.yucli.hook;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -49,5 +50,21 @@ class HookDefinitionTest {
         assertEquals(List.of("allow only safe writes", "return deny for secrets"),
                 definition.normalizedPrompts());
         assertTrue(definition.hasExecutors());
+    }
+
+    @Test
+    void normalizesHttpSecurityRetryAndAsyncOptions() {
+        HookDefinition definition = new HookDefinition();
+        definition.setHeaders(Map.of(" X-Team ", " agent-platform "));
+        definition.setAuthToken(" hook-token ");
+        definition.setRetryCount(9);
+        definition.setRetryBackoffMillis(9_000L);
+        definition.setAsync(true);
+
+        assertEquals("agent-platform", definition.normalizedHeaders().get("X-Team"));
+        assertEquals("Bearer hook-token", definition.normalizedHeaders().get("Authorization"));
+        assertEquals(3, definition.normalizedRetryCount());
+        assertEquals(2_000L, definition.normalizedRetryBackoffMillis());
+        assertTrue(definition.asyncEnabled());
     }
 }

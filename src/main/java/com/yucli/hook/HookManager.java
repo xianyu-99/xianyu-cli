@@ -23,6 +23,7 @@ public class HookManager {
     private final HookCommandExecutor commandExecutor;
     private final HookHttpClient httpClient;
     private final HookPromptExecutor promptExecutor;
+    private final HookAsyncExecutor asyncExecutor;
     private volatile Path projectPath;
 
     public HookManager(Map<HookEvent, List<HookDefinition>> hooks, Path projectPath) {
@@ -40,6 +41,7 @@ public class HookManager {
         this.commandExecutor = executor == null ? new HookCommandExecutor() : executor;
         this.httpClient = httpClient == null ? new HookHttpClient() : httpClient;
         this.promptExecutor = new HookPromptExecutor(llmClient);
+        this.asyncExecutor = new HookAsyncExecutor();
     }
 
     public static HookManager disabled() {
@@ -82,6 +84,7 @@ public class HookManager {
                         commands,
                         urls,
                         prompts,
+                        definition.asyncEnabled(),
                         normalizeTimeout(definition.getTimeoutSeconds())));
             }
         }
@@ -95,6 +98,14 @@ public class HookManager {
 
     public void setLlmClient(LlmClient llmClient) {
         this.promptExecutor.setLlmClient(llmClient);
+    }
+
+    public boolean awaitAsyncHooks(long timeoutMillis) {
+        return asyncExecutor.awaitIdle(timeoutMillis);
+    }
+
+    public void shutdown() {
+        asyncExecutor.shutdown();
     }
 
     public HookDecision runPreToolUse(String toolName, String argumentsJson) {
@@ -196,7 +207,13 @@ public class HookManager {
 
     private void runNonBlockingHooks(HookEvent event, String hookTarget, ObjectNode payload) {
         for (HookDefinition definition : matchingHooks(event, hookTarget)) {
-            runNonBlockingDefinition(event, definition, payload);
+            if (definition.asyncEnabled()) {
+                ObjectNode payloadCopy = payload.deepCopy();
+                asyncExecutor.submit(event.configName(),
+                        () -> runNonBlockingDefinition(event, definition, payloadCopy));
+            } else {
+                runNonBlockingDefinition(event, definition, payload);
+            }
         }
     }
 
@@ -206,11 +223,11 @@ public class HookManager {
             for (HookAction action : actionsFor(definition)) {
                 HookActionResult result = runAction(action, payload, normalizeTimeout(definition.getTimeoutSeconds()));
                 if (!result.success()) {
-                    return HookDecision.block(result.failureMessage());
+                    return HookDecision.block(HookRedactor.redact(result.failureMessage()));
                 }
                 HookDecision outputDecision = parseStructuredDecision(result.output(), action.requiresDecision());
                 if (!outputDecision.allowed()) {
-                    return outputDecision;
+                    return HookDecision.block(HookRedactor.redact(outputDecision.reason()));
                 }
                 if (outputDecision.modified()) {
                     updateArguments(payload, outputDecision.arguments());
@@ -225,13 +242,14 @@ public class HookManager {
         for (HookAction action : actionsFor(definition)) {
             HookActionResult result = runAction(action, payload, normalizeTimeout(definition.getTimeoutSeconds()));
             if (!result.success()) {
-                System.err.println("[Hook] " + event.configName() + " hook failed: " + result.failureMessage());
+                System.err.println("[Hook] " + event.configName() + " hook failed: "
+                        + HookRedactor.redact(result.failureMessage()));
                 continue;
             }
             HookDecision outputDecision = parseStructuredDecision(result.output(), action.requiresDecision());
             if (!outputDecision.allowed()) {
                 System.err.println("[Hook] " + event.configName() + " hook decision ignored: "
-                        + outputDecision.reason());
+                        + HookRedactor.redact(outputDecision.reason()));
             } else if (outputDecision.modified()) {
                 System.err.println("[Hook] " + event.configName() + " modify decision ignored");
             }
@@ -255,13 +273,13 @@ public class HookManager {
     private List<HookAction> actionsFor(HookDefinition definition) {
         List<HookAction> actions = new ArrayList<>();
         for (String command : definition.normalizedCommands()) {
-            actions.add(new HookAction(HookActionType.COMMAND, command));
+            actions.add(new HookAction(HookActionType.COMMAND, command, definition));
         }
         for (String url : definition.normalizedUrls()) {
-            actions.add(new HookAction(HookActionType.HTTP, url));
+            actions.add(new HookAction(HookActionType.HTTP, url, definition));
         }
         for (String prompt : definition.normalizedPrompts()) {
-            actions.add(new HookAction(HookActionType.PROMPT, prompt));
+            actions.add(new HookAction(HookActionType.PROMPT, prompt, definition));
         }
         return actions;
     }
@@ -277,7 +295,17 @@ public class HookManager {
                         : HookActionResult.failure(result.failureMessage());
             }
             case HTTP -> {
-                HookHttpClient.HookHttpResult result = httpClient.post(action.target(), payloadJson, timeoutSeconds);
+                HookDefinition definition = action.definition();
+                HookHttpClient.HookHttpResult result = hasHttpOptions(definition)
+                        ? httpClient.post(
+                                action.target(),
+                                payloadJson,
+                                timeoutSeconds,
+                                definition.normalizedHeaders(),
+                                definition.getSignatureSecret(),
+                                definition.normalizedRetryCount(),
+                                definition.normalizedRetryBackoffMillis())
+                        : httpClient.post(action.target(), payloadJson, timeoutSeconds);
                 yield result.success()
                         ? HookActionResult.success(result.body())
                         : HookActionResult.failure(result.failureMessage());
@@ -362,7 +390,7 @@ public class HookManager {
         String reason = textOrNull(decisionNode.get("reason"));
         return switch (decision) {
             case "allow" -> HookDecision.allow();
-            case "deny" -> HookDecision.block(reason);
+            case "deny" -> HookDecision.block(HookRedactor.redact(reason));
             case "modify" -> {
                 JsonNode arguments = decisionNode.get("arguments");
                 if (arguments == null || !arguments.isObject()) {
@@ -452,6 +480,13 @@ public class HookManager {
         return Math.min(timeoutSeconds, MAX_TIMEOUT_SECONDS);
     }
 
+    private static boolean hasHttpOptions(HookDefinition definition) {
+        return definition != null
+                && (!definition.normalizedHeaders().isEmpty()
+                || definition.getSignatureSecret() != null
+                || definition.normalizedRetryCount() > 0);
+    }
+
     private static Map<HookEvent, List<HookDefinition>> copyHooks(Map<HookEvent, List<HookDefinition>> source) {
         Map<HookEvent, List<HookDefinition>> copy = new EnumMap<>(HookEvent.class);
         if (source == null) {
@@ -476,7 +511,7 @@ public class HookManager {
         PROMPT
     }
 
-    private record HookAction(HookActionType type, String target) {
+    private record HookAction(HookActionType type, String target, HookDefinition definition) {
         private boolean requiresDecision() {
             return type == HookActionType.PROMPT;
         }
@@ -508,9 +543,10 @@ public class HookManager {
     }
 
     public record HookSummary(String event, String matcher, List<String> commands,
-                              List<String> urls, List<String> prompts, int timeoutSeconds) {
+                              List<String> urls, List<String> prompts,
+                              boolean async, int timeoutSeconds) {
         public HookSummary(String event, String matcher, List<String> commands, int timeoutSeconds) {
-            this(event, matcher, commands, List.of(), List.of(), timeoutSeconds);
+            this(event, matcher, commands, List.of(), List.of(), false, timeoutSeconds);
         }
 
         public HookSummary {

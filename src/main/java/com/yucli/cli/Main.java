@@ -1485,6 +1485,7 @@ public class Main {
                         + " commands=" + hook.commandCount()
                         + " http=" + hook.httpCount()
                         + " prompt=" + hook.promptCount()
+                        + " async=" + hook.async()
                         + " timeout=" + hook.timeoutSeconds() + "s");
             }
         }

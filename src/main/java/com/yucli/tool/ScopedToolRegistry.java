@@ -1,8 +1,11 @@
 package com.yucli.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yucli.hook.HookManager;
 import com.yucli.llm.LlmClient;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -14,12 +17,29 @@ import java.util.Objects;
  * allowlist 为空时保持不限制，直接委托底层 registry。</p>
  */
 public class ScopedToolRegistry extends ToolRegistry {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final List<String> PATH_TOOLS = List.of("read_file", "write_file", "list_dir", "create_project");
+
     private final ToolRegistry delegate;
     private final List<String> allowedToolMatchers;
+    private final List<String> allowedPathMatchers;
+    private final List<String> deniedCommandMatchers;
+    private final String workingDirectory;
 
     public ScopedToolRegistry(ToolRegistry delegate, List<String> allowedToolMatchers) {
+        this(delegate, allowedToolMatchers, List.of(), List.of(), null);
+    }
+
+    public ScopedToolRegistry(ToolRegistry delegate, List<String> allowedToolMatchers,
+                              List<String> allowedPathMatchers, List<String> deniedCommandMatchers,
+                              String workingDirectory) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.allowedToolMatchers = sanitizeMatchers(allowedToolMatchers);
+        this.allowedPathMatchers = sanitizeMatchers(allowedPathMatchers);
+        this.deniedCommandMatchers = sanitizeMatchers(deniedCommandMatchers);
+        this.workingDirectory = workingDirectory == null || workingDirectory.isBlank()
+                ? null
+                : workingDirectory.trim();
     }
 
     @Override
@@ -38,6 +58,10 @@ public class ScopedToolRegistry extends ToolRegistry {
         if (!isAllowed(name)) {
             return deniedResult(name);
         }
+        String scopeViolation = scopeViolation(name, argumentsJson);
+        if (scopeViolation != null) {
+            return scopeViolation;
+        }
         return delegate.executeTool(name, argumentsJson);
     }
 
@@ -46,7 +70,7 @@ public class ScopedToolRegistry extends ToolRegistry {
         if (invocations == null || invocations.isEmpty()) {
             return List.of();
         }
-        if (isUnrestricted()) {
+        if (hasNoRestrictions()) {
             return delegate.executeTools(invocations);
         }
 
@@ -56,11 +80,14 @@ public class ScopedToolRegistry extends ToolRegistry {
 
         for (int i = 0; i < invocations.size(); i++) {
             ToolInvocation invocation = invocations.get(i);
-            if (isAllowed(invocation.name())) {
+            String violation = !isAllowed(invocation.name())
+                    ? deniedResult(invocation.name())
+                    : scopeViolation(invocation.name(), invocation.argumentsJson());
+            if (violation == null) {
                 allowedIndexes.add(i);
                 allowedInvocations.add(invocation);
             } else {
-                results[i] = deniedExecutionResult(invocation);
+                results[i] = deniedExecutionResult(invocation, violation);
             }
         }
 
@@ -105,6 +132,18 @@ public class ScopedToolRegistry extends ToolRegistry {
         return allowedToolMatchers;
     }
 
+    public List<String> allowedPathMatchers() {
+        return allowedPathMatchers;
+    }
+
+    public List<String> deniedCommandMatchers() {
+        return deniedCommandMatchers;
+    }
+
+    public String workingDirectory() {
+        return workingDirectory;
+    }
+
     public static boolean matches(String matcher, String toolName) {
         if (matcher == null || matcher.isBlank() || toolName == null || toolName.isBlank()) {
             return false;
@@ -124,12 +163,19 @@ public class ScopedToolRegistry extends ToolRegistry {
         return allowedToolMatchers.isEmpty();
     }
 
-    private ToolExecutionResult deniedExecutionResult(ToolInvocation invocation) {
+    private boolean hasNoRestrictions() {
+        return allowedToolMatchers.isEmpty()
+                && allowedPathMatchers.isEmpty()
+                && deniedCommandMatchers.isEmpty()
+                && workingDirectory == null;
+    }
+
+    private ToolExecutionResult deniedExecutionResult(ToolInvocation invocation, String result) {
         return new ToolExecutionResult(
                 invocation.id(),
                 invocation.name(),
                 invocation.argumentsJson(),
-                deniedResult(invocation.name()),
+                result,
                 0,
                 false
         );
@@ -139,6 +185,92 @@ public class ScopedToolRegistry extends ToolRegistry {
         String displayName = toolName == null || toolName.isBlank() ? "<unknown>" : toolName;
         return "[SubAgent Scope] 工具调用被拒绝: 未授权工具 " + displayName
                 + "，允许范围: " + String.join(", ", allowedToolMatchers);
+    }
+
+    private String scopeViolation(String toolName, String argumentsJson) {
+        if ("execute_command".equals(toolName)) {
+            return commandScopeViolation(argumentsJson);
+        }
+        if (PATH_TOOLS.contains(toolName)) {
+            return pathScopeViolation(toolName, argumentsJson);
+        }
+        return null;
+    }
+
+    private String commandScopeViolation(String argumentsJson) {
+        String command = parseArgument(argumentsJson, "command");
+        for (String matcher : deniedCommandMatchers) {
+            if (matchesCommand(matcher, command)) {
+                return "[SubAgent Scope] 工具调用被拒绝: 命令匹配 deniedCommands: " + matcher;
+            }
+        }
+        if (workingDirectory != null && !isCurrentProjectInsideWorkingDirectory()) {
+            return "[SubAgent Scope] 工具调用被拒绝: 当前项目目录不在 SubAgent workingDirectory 内: "
+                    + workingDirectory;
+        }
+        return null;
+    }
+
+    private String pathScopeViolation(String toolName, String argumentsJson) {
+        if (allowedPathMatchers.isEmpty()) {
+            return null;
+        }
+        String pathValue = "create_project".equals(toolName)
+                ? parseArgument(argumentsJson, "name")
+                : parseArgument(argumentsJson, "path");
+        if (pathValue == null || pathValue.isBlank()) {
+            return "[SubAgent Scope] 工具调用被拒绝: 缺少路径参数";
+        }
+        Path target = resolveProjectPath(pathValue);
+        boolean allowed = allowedPathMatchers.stream()
+                .map(this::resolveProjectPath)
+                .anyMatch(target::startsWith);
+        if (!allowed) {
+            return "[SubAgent Scope] 工具调用被拒绝: 路径不在 allowedPaths 内: " + pathValue
+                    + "，允许范围: " + String.join(", ", allowedPathMatchers);
+        }
+        return null;
+    }
+
+    private boolean isCurrentProjectInsideWorkingDirectory() {
+        Path project = Path.of(delegate.getProjectPath()).toAbsolutePath().normalize();
+        Path allowed = resolveProjectPath(workingDirectory);
+        return project.startsWith(allowed);
+    }
+
+    private Path resolveProjectPath(String path) {
+        Path candidate = Path.of(path);
+        if (!candidate.isAbsolute()) {
+            candidate = Path.of(delegate.getProjectPath()).resolve(candidate);
+        }
+        return candidate.toAbsolutePath().normalize();
+    }
+
+    private static boolean matchesCommand(String matcher, String command) {
+        if (matcher == null || matcher.isBlank() || command == null) {
+            return false;
+        }
+        String normalizedMatcher = matcher.trim().toLowerCase(java.util.Locale.ROOT);
+        String normalizedCommand = command.toLowerCase(java.util.Locale.ROOT);
+        if ("*".equals(normalizedMatcher)) {
+            return true;
+        }
+        if (normalizedMatcher.endsWith("*")) {
+            return normalizedCommand.startsWith(normalizedMatcher.substring(0, normalizedMatcher.length() - 1));
+        }
+        return normalizedCommand.contains(normalizedMatcher);
+    }
+
+    private static String parseArgument(String argumentsJson, String key) {
+        if (argumentsJson == null || argumentsJson.isBlank()) {
+            return "";
+        }
+        try {
+            JsonNode node = MAPPER.readTree(argumentsJson);
+            return node.path(key).asText("");
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private static List<String> sanitizeMatchers(List<String> matchers) {

@@ -3,8 +3,10 @@ package com.yucli.hook;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class HookDefinition {
@@ -15,6 +17,12 @@ public class HookDefinition {
     private List<String> urls = new ArrayList<>();
     private String prompt;
     private List<String> prompts = new ArrayList<>();
+    private Map<String, String> headers = new LinkedHashMap<>();
+    private String authToken;
+    private String signatureSecret;
+    private Integer retryCount;
+    private Long retryBackoffMillis;
+    private Boolean async;
     private Integer timeoutSeconds;
 
     public HookDefinition() {
@@ -82,6 +90,54 @@ public class HookDefinition {
         this.prompts = prompts == null ? new ArrayList<>() : prompts;
     }
 
+    public Map<String, String> getHeaders() {
+        return headers;
+    }
+
+    public void setHeaders(Map<String, String> headers) {
+        this.headers = headers == null ? new LinkedHashMap<>() : new LinkedHashMap<>(headers);
+    }
+
+    public String getAuthToken() {
+        return authToken;
+    }
+
+    public void setAuthToken(String authToken) {
+        this.authToken = trimToNull(authToken);
+    }
+
+    public String getSignatureSecret() {
+        return signatureSecret;
+    }
+
+    public void setSignatureSecret(String signatureSecret) {
+        this.signatureSecret = trimToNull(signatureSecret);
+    }
+
+    public Integer getRetryCount() {
+        return retryCount;
+    }
+
+    public void setRetryCount(Integer retryCount) {
+        this.retryCount = retryCount;
+    }
+
+    public Long getRetryBackoffMillis() {
+        return retryBackoffMillis;
+    }
+
+    public void setRetryBackoffMillis(Long retryBackoffMillis) {
+        this.retryBackoffMillis = retryBackoffMillis;
+    }
+
+    public Boolean getAsync() {
+        return async;
+    }
+
+    public void setAsync(Boolean async) {
+        this.async = async;
+    }
+
     public Integer getTimeoutSeconds() {
         return timeoutSeconds;
     }
@@ -100,6 +156,40 @@ public class HookDefinition {
 
     public List<String> normalizedPrompts() {
         return normalize(prompt, prompts);
+    }
+
+    public Map<String, String> normalizedHeaders() {
+        Map<String, String> normalized = new LinkedHashMap<>();
+        if (headers != null) {
+            headers.forEach((key, value) -> {
+                if (key != null && !key.isBlank() && value != null) {
+                    normalized.put(key.trim(), value.trim());
+                }
+            });
+        }
+        if (authToken != null && !authToken.isBlank()
+                && normalized.keySet().stream().noneMatch("authorization"::equalsIgnoreCase)) {
+            normalized.put("Authorization", "Bearer " + authToken.trim());
+        }
+        return normalized;
+    }
+
+    public int normalizedRetryCount() {
+        if (retryCount == null || retryCount <= 0) {
+            return 0;
+        }
+        return Math.min(retryCount, 3);
+    }
+
+    public long normalizedRetryBackoffMillis() {
+        if (retryBackoffMillis == null || retryBackoffMillis <= 0) {
+            return 200L;
+        }
+        return Math.min(retryBackoffMillis, 2_000L);
+    }
+
+    public boolean asyncEnabled() {
+        return Boolean.TRUE.equals(async);
     }
 
     public boolean hasExecutors() {
@@ -148,5 +238,13 @@ public class HookDefinition {
             return toolName.toLowerCase(Locale.ROOT).startsWith(prefix);
         }
         return pattern.equalsIgnoreCase(toolName);
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

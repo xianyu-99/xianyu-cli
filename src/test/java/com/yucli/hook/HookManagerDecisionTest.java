@@ -16,6 +16,9 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -216,6 +219,43 @@ class HookManagerDecisionTest {
     }
 
     @Test
+    void httpHookOptionsUseExtendedClient(@TempDir Path tempDir) {
+        HookDefinition definition = new HookDefinition();
+        definition.setMatcher("write_file");
+        definition.setUrl("https://hooks.example/pre");
+        definition.setHeaders(Map.of("X-Team", "platform"));
+        definition.setAuthToken("hook-token");
+        definition.setSignatureSecret("hmac-secret");
+        definition.setRetryCount(2);
+        definition.setRetryBackoffMillis(25L);
+        RecordingHttpClient httpClient = new RecordingHttpClient(
+                new HookHttpClient.HookHttpResult(
+                        200,
+                        "{\"decision\":\"allow\"}",
+                        false,
+                        null,
+                        "https://hooks.example/pre"));
+        HookManager manager = new HookManager(
+                hooks(definition),
+                tempDir,
+                stdoutExecutor(""),
+                httpClient,
+                null);
+
+        HookDecision decision = manager.runPreToolUse(
+                "write_file",
+                "{\"path\":\"safe.txt\",\"content\":\"ok\"}");
+
+        assertTrue(decision.allowed());
+        assertEquals(1, httpClient.headers.size());
+        assertEquals("platform", httpClient.headers.get(0).get("X-Team"));
+        assertEquals("Bearer hook-token", httpClient.headers.get(0).get("Authorization"));
+        assertEquals("hmac-secret", httpClient.signatureSecrets.get(0));
+        assertEquals(2, httpClient.retryCounts.get(0));
+        assertEquals(25L, httpClient.retryBackoffMillis.get(0));
+    }
+
+    @Test
     void postToolUseHttpFailureOnlyWarns(@TempDir Path tempDir) {
         HookDefinition definition = new HookDefinition();
         definition.setMatcher("*");
@@ -239,6 +279,44 @@ class HookManagerDecisionTest {
 
         assertTrue(stderr.contains("[Hook] PostToolUse hook failed"), stderr);
         assertTrue(stderr.contains("500"), stderr);
+    }
+
+    @Test
+    void asyncLifecycleHookDoesNotBlockCaller(@TempDir Path tempDir) throws Exception {
+        HookDefinition definition = new HookDefinition();
+        definition.setMatcher("react");
+        definition.setCommand("slow");
+        definition.setAsync(true);
+        Map<HookEvent, List<HookDefinition>> hooks = new EnumMap<>(HookEvent.class);
+        hooks.put(HookEvent.AGENT_FINISH, List.of(definition));
+
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        HookCommandExecutor executor = new HookCommandExecutor() {
+            @Override
+            HookCommandResult execute(String command, String inputJson, Path workDir, int timeoutSeconds) {
+                started.countDown();
+                try {
+                    release.await(2, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                calls.incrementAndGet();
+                return success("");
+            }
+        };
+        HookManager manager = new HookManager(hooks, tempDir, executor);
+
+        long start = System.nanoTime();
+        manager.runAgentFinish("react", "input", "result", 1, "", false);
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        assertTrue(elapsedMillis < 1_000, "async hook should not block caller for latch release");
+        assertTrue(started.await(1, TimeUnit.SECONDS), "async hook should start in background");
+        release.countDown();
+        assertTrue(manager.awaitAsyncHooks(2_000));
+        assertEquals(1, calls.get());
     }
 
     @Test
@@ -331,6 +409,10 @@ class HookManagerDecisionTest {
     private static class RecordingHttpClient extends HookHttpClient {
         private final Queue<HookHttpResult> results = new ArrayDeque<>();
         private final List<String> payloads = new ArrayList<>();
+        private final List<Map<String, String>> headers = new ArrayList<>();
+        private final List<String> signatureSecrets = new ArrayList<>();
+        private final List<Integer> retryCounts = new ArrayList<>();
+        private final List<Long> retryBackoffMillis = new ArrayList<>();
 
         RecordingHttpClient(HookHttpResult... results) {
             this.results.addAll(List.of(results));
@@ -343,6 +425,17 @@ class HookManagerDecisionTest {
                 return new HookHttpResult(200, "", false, null, url);
             }
             return results.remove();
+        }
+
+        @Override
+        HookHttpResult post(String url, String inputJson, int timeoutSeconds,
+                            Map<String, String> headers, String signatureSecret,
+                            int retryCount, long retryBackoffMillis) {
+            this.headers.add(headers == null ? Map.of() : Map.copyOf(headers));
+            this.signatureSecrets.add(signatureSecret);
+            this.retryCounts.add(retryCount);
+            this.retryBackoffMillis.add(retryBackoffMillis);
+            return post(url, inputJson, timeoutSeconds);
         }
     }
 

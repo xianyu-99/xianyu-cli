@@ -322,7 +322,9 @@ hook 执行器：
 - `url` / `urls`：HTTP POST JSON payload，2xx 视为成功
 - `prompt` / `prompts`：使用当前 LLM 做结构化 hook 决策，不传工具列表，避免 hook 内部递归 tool-call
 
-阻断型事件（`PreToolUse`、`UserPromptSubmit`）可返回 `{"decision":"allow|deny|modify","reason":"...","arguments":{...}}`；非阻断事件会忽略 `deny/modify`，只向 stderr 打印 warning。`/hooks` 可查看当前 hook 状态、事件计数、matcher、command/http/prompt 数量和 timeout。
+HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`retryBackoffMillis`：`authToken` 会补 `Authorization: Bearer ...`，`signatureSecret` 会生成 `X-YuCLI-Signature: sha256=...`，429/5xx/超时/网络错误按 `retryCount` 重试。hook 错误输出会对 token/key/password/secret/authorization 做脱敏。
+
+阻断型事件（`PreToolUse`、`UserPromptSubmit`）可返回 `{"decision":"allow|deny|modify","reason":"...","arguments":{...}}`；非阻断事件会忽略 `deny/modify`，只向 stderr 打印 warning。非阻断事件可设置 `"async": true` 后台执行，避免通知类 hook 阻塞主流程。`/hooks` 可查看当前 hook 状态、事件计数、matcher、command/http/prompt 数量、async 和 timeout。
 
 配置示例：
 
@@ -333,10 +335,18 @@ hook 执行器：
       { "matcher": "write_file", "commands": ["python scripts/check_write.py"], "timeoutSeconds": 5 }
     ],
     "UserPromptSubmit": [
-      { "matcher": "plan", "url": "https://example.com/yucli/prompt-hook" }
+      {
+        "matcher": "plan",
+        "url": "https://example.com/yucli/prompt-hook",
+        "headers": {"X-YuCLI-Project": "demo"},
+        "authToken": "your-hook-token",
+        "signatureSecret": "your-hmac-secret",
+        "retryCount": 2,
+        "retryBackoffMillis": 250
+      }
     ],
     "PostToolUse": [
-      { "matcher": "*", "command": "python scripts/log_tool.py" }
+      { "matcher": "*", "command": "python scripts/log_tool.py", "async": true }
     ]
   }
 }
@@ -355,7 +365,7 @@ YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / 
 
 同名 profile 由项目级覆盖用户级。可用 `/agents` 查看当前加载结果。存在 `WORKER` profile 时，worker 池由这些 profile 决定；否则回退默认 `worker-1` / `worker-2`。
 
-`tools` 是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前被拒绝。为空时不限制。
+`tools` 是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前被拒绝。为空时不限制。Profile 也可配置 `allowedPaths`、`deniedCommands`、`workingDirectory`，用于给单个 SubAgent 增加独立路径/命令 scope；这些限制同样由 `ScopedToolRegistry` 在运行时硬拦截。
 
 ```json
 {
@@ -363,6 +373,9 @@ YuCLI 已支持加载自定义 SubAgent Profile 配置，并已接入 `/team` / 
   "role": "REVIEWER",
   "instructions": "审查执行结果，指出风险和缺口。",
   "tools": ["read_file", "search_code"],
+  "allowedPaths": ["src", "README.md"],
+  "deniedCommands": ["git push", "curl*"],
+  "workingDirectory": "src",
   "model": "glm-5.1"
 }
 ```

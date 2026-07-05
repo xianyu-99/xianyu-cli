@@ -264,7 +264,7 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
   - `PLANNER`：优先使用名为 `planner` 的 profile，否则使用第一个 planner profile，否则回退默认 planner
   - `WORKER`：只要存在 worker profile，worker 池大小就等于 worker profile 数量；没有 worker profile 时回退默认 `worker-1` / `worker-2`
   - `REVIEWER`：优先使用名为 `reviewer` 的 profile，否则使用第一个 reviewer profile，否则回退默认 reviewer
-- `SubAgent` 会在默认角色 prompt 后追加 profile 的 `instructions` 与工具白名单提示；`tools` 同时是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前由 `ScopedToolRegistry` 拒绝。为空时不限制
+- `SubAgent` 会在默认角色 prompt 后追加 profile 的 `instructions` 与工具白名单提示；`tools` 同时是运行时硬白名单：SubAgent 只会看到匹配的工具定义，越权 tool-call 会在进入底层 `ToolRegistry` 前由 `ScopedToolRegistry` 拒绝。为空时不限制。`allowedPaths` / `deniedCommands` / `workingDirectory` 可给单个 SubAgent 增加独立路径和命令 scope，同样由 `ScopedToolRegistry` 运行时硬拦截。
 - 当前 JSON 格式：
 
 ```json
@@ -273,11 +273,14 @@ mvn test -Dtest=EvalHarness -DYuCLI.eval.enabled=true
   "role": "REVIEWER",
   "instructions": "审查执行结果，指出风险和缺口。",
   "tools": ["read_file", "search_code"],
+  "allowedPaths": ["src", "README.md"],
+  "deniedCommands": ["git push", "curl*"],
+  "workingDirectory": "src",
   "model": "glm-5.1"
 }
 ```
 
-- `name`、`role`、`instructions` 必填；`role` 支持 `PLANNER` / `WORKER` / `REVIEWER`（大小写不敏感）；`tools` 默认空列表；`model` 可选，仅解析保存，暂不切换运行模型
+- `name`、`role`、`instructions` 必填；`role` 支持 `PLANNER` / `WORKER` / `REVIEWER`（大小写不敏感）；`tools` / `allowedPaths` / `deniedCommands` 默认空列表；`workingDirectory` / `model` 可选，其中 `model` 仅解析保存，暂不切换运行模型
 
 ### 7. HITL 审批系统
 
@@ -338,6 +341,8 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `command` / `commands`：本地命令，通过 stdin 接收 JSON payload
   - `url` / `urls`：HTTP POST JSON payload，2xx 视为成功
   - `prompt` / `prompts`：使用当前 LLM 做结构化 hook 决策，不传工具列表，避免 hook 内部递归 tool-call；未配置 LLM 时阻断型事件会拒绝，非阻断事件只 warning
+- HTTP hook 支持 `headers`、`authToken`、`signatureSecret`、`retryCount`、`retryBackoffMillis`：`authToken` 自动补 `Authorization: Bearer ...`，`signatureSecret` 生成 `X-YuCLI-Signature: sha256=...`，429/5xx/超时/网络错误按 `retryCount` 重试。hook 错误输出会对 token/key/password/secret/authorization 做脱敏
+- 非阻断事件可配置 `async: true` 后台执行，适合通知类 hook；阻断型事件仍同步执行，因为需要决定是否放行或修改参数
 - `matcher` 支持精确值、`*`、前缀通配：
   - 工具事件匹配工具名，如 `write_file` / `mcp__*`
   - `UserPromptSubmit` 和顶层 Agent 事件匹配 mode：`react` / `plan` / `team`
@@ -348,8 +353,8 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
   - `{"decision":"allow"}`：显式放行
   - `{"decision":"deny","reason":"..."}`：阻断工具调用
   - `{"decision":"modify","arguments":{...}}`：`PreToolUse` 替换后续工具调用参数；`UserPromptSubmit` 只读取 `arguments.prompt` 替换后续 Agent 输入
-- 非阻断事件（`PostToolUse`、Agent/SubAgent start/finish、`PreCompact`）会运行 command/http/prompt，但失败和 `deny/modify` 只向 stderr 打 warning，不改变主流程
-- `/hooks` / `/hooks list`：查看当前 hook 启用状态、事件计数、matcher、command/http/prompt 数量与 timeout
+- 非阻断事件（`PostToolUse`、Agent/SubAgent start/finish、`PreCompact`）会运行 command/http/prompt，但失败和 `deny/modify` 只向 stderr 打 warning，不改变主流程；配置 `async: true` 时这些执行器进入后台线程
+- `/hooks` / `/hooks list`：查看当前 hook 启用状态、事件计数、matcher、command/http/prompt 数量、async 与 timeout
 - 配置格式：
 
 ```json
@@ -359,20 +364,28 @@ HITL 是"用户在场时确认"，本子段是 HITL 之外的辅助层，不是�
       { "matcher": "write_file", "commands": ["python scripts/check_write.py"], "timeoutSeconds": 5 }
     ],
     "UserPromptSubmit": [
-      { "matcher": "plan", "url": "https://example.com/yucli/prompt-hook" }
+      {
+        "matcher": "plan",
+        "url": "https://example.com/yucli/prompt-hook",
+        "headers": {"X-YuCLI-Project": "demo"},
+        "authToken": "your-hook-token",
+        "signatureSecret": "your-hmac-secret",
+        "retryCount": 2,
+        "retryBackoffMillis": 250
+      }
     ],
     "AgentFinish": [
       { "matcher": "*", "prompt": "Return allow after recording any notable run metadata." }
     ],
     "PostToolUse": [
-      { "matcher": "*", "command": "python scripts/log_tool.py" }
+      { "matcher": "*", "command": "python scripts/log_tool.py", "async": true }
     ]
   }
 }
 ```
 
 - HITL 与 hook 的协同顺序：`HitlToolRegistry` 先处理人工审批；审批通过后进入 `ToolRegistry`，再执行 `PreToolUse`、策略层、真实工具、`PostToolUse`
-- 当前不支持异步 hook；HTTP hook 和 LLM prompt hook 已支持
+- HTTP hook、LLM prompt hook、非阻断异步 hook 已支持；阻断型 hook 必须同步执行
 
 #### 7.3 Checkpoint / Undo
 
@@ -622,6 +635,8 @@ src/main/java/com/yucli
 │   ├── HookDefinition.java
 │   ├── HookDecision.java
 │   ├── HookEvent.java
+│   ├── HookAsyncExecutor.java
+│   ├── HookRedactor.java
 │   └── HookCommandExecutor.java
 ├── checkpoint/
 │   ├── CheckpointManager.java
@@ -683,7 +698,7 @@ src/main/java/com/yucli
 - `ApprovalResultTest`
 - `HitlToolRegistryTest`
 - `TerminalHitlHandlerTest`
-- `HookDefinitionTest`、`HookConfigLoaderTest`、`HookManagerDecisionTest`、`ToolRegistryHookTest`
+- `HookDefinitionTest`、`HookConfigLoaderTest`、`HookHttpClientTest`、`HookManagerDecisionTest`、`ToolRegistryHookTest`、`ScopedToolRegistryTest`
 - `CheckpointManagerTest`
 - `HeadlessRunnerTest`
 - `ToolRegistryTest`

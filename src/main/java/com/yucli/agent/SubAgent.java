@@ -133,14 +133,26 @@ public class SubAgent {
 
     public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
                     String customInstructions, List<String> toolWhitelist) {
+        this(name, role, llmClient, toolRegistry, customInstructions, toolWhitelist,
+                List.of(), List.of(), null);
+    }
+
+    public SubAgent(String name, AgentRole role, LlmClient llmClient, ToolRegistry toolRegistry,
+                    String customInstructions, List<String> toolWhitelist,
+                    List<String> allowedPaths, List<String> deniedCommands, String workingDirectory) {
         this.name = name;
         this.role = role;
         this.llmClient = llmClient;
         this.customInstructions = customInstructions;
         this.toolWhitelist = sanitizeToolWhitelist(toolWhitelist);
-        this.toolRegistry = this.toolWhitelist.isEmpty()
+        boolean scoped = !this.toolWhitelist.isEmpty()
+                || (allowedPaths != null && !allowedPaths.isEmpty())
+                || (deniedCommands != null && !deniedCommands.isEmpty())
+                || (workingDirectory != null && !workingDirectory.isBlank());
+        this.toolRegistry = !scoped
                 ? toolRegistry
-                : new ScopedToolRegistry(toolRegistry, this.toolWhitelist);
+                : new ScopedToolRegistry(toolRegistry, this.toolWhitelist,
+                        allowedPaths, deniedCommands, workingDirectory);
         this.toolRegistry.getHookManager().setLlmClient(llmClient);
         this.conversationHistory = new ArrayList<>();
         this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));
@@ -148,7 +160,8 @@ public class SubAgent {
 
     public SubAgent(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {
         this(profile.getName(), profile.getRole(), llmClient, toolRegistry,
-                profile.getInstructions(), profile.getTools());
+                profile.getInstructions(), profile.getTools(),
+                profile.getAllowedPaths(), profile.getDeniedCommands(), profile.getWorkingDirectory());
     }
 
     public static SubAgent fromProfile(AgentProfile profile, LlmClient llmClient, ToolRegistry toolRegistry) {

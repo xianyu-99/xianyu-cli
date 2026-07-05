@@ -47,6 +47,9 @@ class AgentProfileLoaderTest {
                   "role": "REVIEWER",
                   "instructions": "Project reviewer profile",
                   "tools": ["read_file", "search_code"],
+                  "allowedPaths": ["src", "README.md"],
+                  "deniedCommands": ["git push"],
+                  "workingDirectory": "src",
                   "model": "deepseek-v4-pro"
                 }
                 """);
@@ -67,6 +70,9 @@ class AgentProfileLoaderTest {
         assertEquals(AgentRole.REVIEWER, reviewer.getRole());
         assertEquals("Project reviewer profile", reviewer.getInstructions());
         assertEquals(List.of("read_file", "search_code"), reviewer.getTools());
+        assertEquals(List.of("src", "README.md"), reviewer.getAllowedPaths());
+        assertEquals(List.of("git push"), reviewer.getDeniedCommands());
+        assertEquals("src", reviewer.getWorkingDirectory());
         assertEquals("deepseek-v4-pro", reviewer.getModel());
         assertEquals(projectProfile.toAbsolutePath().normalize(), reviewer.getSourcePath());
 
@@ -86,8 +92,12 @@ class AgentProfileLoaderTest {
                 """);
 
         AgentProfileLoader loader = new AgentProfileLoader(userAgents, tempDir.resolve("project-agents"));
+        AgentProfile worker = loader.load().get("worker");
 
-        assertEquals(List.of(), loader.load().get("worker").getTools());
+        assertEquals(List.of(), worker.getTools());
+        assertEquals(List.of(), worker.getAllowedPaths());
+        assertEquals(List.of(), worker.getDeniedCommands());
+        assertNull(worker.getWorkingDirectory());
     }
 
     @Test

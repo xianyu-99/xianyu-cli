@@ -16,6 +16,9 @@ public class AgentProfile {
     private AgentRole role;
     private String instructions;
     private List<String> tools = new ArrayList<>();
+    private List<String> allowedPaths = new ArrayList<>();
+    private List<String> deniedCommands = new ArrayList<>();
+    private String workingDirectory;
     private String model;
     private Path sourcePath;
 
@@ -52,6 +55,30 @@ public class AgentProfile {
         this.tools = tools == null ? new ArrayList<>() : new ArrayList<>(tools);
     }
 
+    public List<String> getAllowedPaths() {
+        return allowedPaths;
+    }
+
+    public void setAllowedPaths(List<String> allowedPaths) {
+        this.allowedPaths = allowedPaths == null ? new ArrayList<>() : new ArrayList<>(allowedPaths);
+    }
+
+    public List<String> getDeniedCommands() {
+        return deniedCommands;
+    }
+
+    public void setDeniedCommands(List<String> deniedCommands) {
+        this.deniedCommands = deniedCommands == null ? new ArrayList<>() : new ArrayList<>(deniedCommands);
+    }
+
+    public String getWorkingDirectory() {
+        return workingDirectory;
+    }
+
+    public void setWorkingDirectory(String workingDirectory) {
+        this.workingDirectory = trimToNull(workingDirectory);
+    }
+
     public String getModel() {
         return model;
     }
@@ -83,6 +110,16 @@ public class AgentProfile {
         for (String tool : tools) {
             if (tool == null || tool.isBlank()) {
                 throw new IllegalArgumentException("agent profile tools cannot contain blank values");
+            }
+        }
+        validateNoBlank("allowedPaths", allowedPaths);
+        validateNoBlank("deniedCommands", deniedCommands);
+    }
+
+    private void validateNoBlank(String fieldName, List<String> values) {
+        for (String value : values) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException("agent profile " + fieldName + " cannot contain blank values");
             }
         }
     }

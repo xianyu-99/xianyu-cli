@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.yucli.hook.HookManager;
 import com.yucli.llm.LlmClient;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -77,6 +78,63 @@ class ScopedToolRegistryTest {
         assertEquals("delegate-browser_click", results.get(0).result());
         assertTrue(ScopedToolRegistry.matches("browser_*", "browser_click"));
         assertFalse(ScopedToolRegistry.matches("browser_*", "mcp__demo__echo"));
+    }
+
+    @Test
+    void shouldRejectPathOutsideAllowedPathsWithoutTouchingDelegate(@TempDir Path tempDir) {
+        FakeToolRegistry delegate = new FakeToolRegistry();
+        delegate.setProjectPath(tempDir.toString());
+        ScopedToolRegistry scoped = new ScopedToolRegistry(
+                delegate,
+                List.of(),
+                List.of("src"),
+                List.of(),
+                null);
+
+        List<ToolRegistry.ToolExecutionResult> results = scoped.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("call_1", "read_file", "{\"path\":\"README.md\"}")
+        ));
+
+        assertEquals(0, delegate.executeToolsCalls.get());
+        assertTrue(results.get(0).result().contains("allowedPaths"));
+    }
+
+    @Test
+    void shouldAllowPathInsideAllowedPaths(@TempDir Path tempDir) {
+        FakeToolRegistry delegate = new FakeToolRegistry();
+        delegate.setProjectPath(tempDir.toString());
+        ScopedToolRegistry scoped = new ScopedToolRegistry(
+                delegate,
+                List.of(),
+                List.of("src"),
+                List.of(),
+                null);
+
+        List<ToolRegistry.ToolExecutionResult> results = scoped.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("call_1", "read_file", "{\"path\":\"src/Main.java\"}")
+        ));
+
+        assertEquals(1, delegate.executeToolsCalls.get());
+        assertEquals("delegate-read_file", results.get(0).result());
+    }
+
+    @Test
+    void shouldRejectDeniedCommandWithoutTouchingDelegate() {
+        FakeToolRegistry delegate = new FakeToolRegistry();
+        ScopedToolRegistry scoped = new ScopedToolRegistry(
+                delegate,
+                List.of(),
+                List.of(),
+                List.of("git push"),
+                null);
+
+        List<ToolRegistry.ToolExecutionResult> results = scoped.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("call_1", "execute_command",
+                        "{\"command\":\"git push origin main\"}")
+        ));
+
+        assertEquals(0, delegate.executeToolsCalls.get());
+        assertTrue(results.get(0).result().contains("deniedCommands"));
     }
 
     @Test
