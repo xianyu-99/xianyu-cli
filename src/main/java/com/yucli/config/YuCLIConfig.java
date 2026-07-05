@@ -121,14 +121,14 @@ public class YuCLIConfig {
 
         for (String envKey : envKeys) {
             String envValue = System.getenv(envKey);
-            if (envValue != null && !envValue.isBlank()) {
+            if (isConfiguredSecret(envValue)) {
                 return envValue.trim();
             }
         }
 
         for (String envKey : envKeys) {
             String dotEnvValue = readFromDotEnv(envKey);
-            if (dotEnvValue != null && !dotEnvValue.isBlank()) {
+            if (isConfiguredSecret(dotEnvValue)) {
                 return dotEnvValue.trim();
             }
         }
@@ -143,6 +143,21 @@ public class YuCLIConfig {
             case "anthropic" -> List.of("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN");
             default -> List.of(provider.toUpperCase() + "_API_KEY");
         };
+    }
+
+    static boolean isConfiguredSecret(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase();
+        return !normalized.equals("your_api_key_here")
+                && !normalized.equals("your-key")
+                && !normalized.equals("your_key")
+                && !normalized.equals("your_openai_compatible_key_here")
+                && !normalized.equals("your_qwen_api_key_here")
+                && !normalized.equals("your_deepseek_api_key_here")
+                && !normalized.startsWith("your_")
+                && !normalized.endsWith("_here");
     }
 
     private static String loadBaseUrlFromEnv(String provider) {

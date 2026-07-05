@@ -179,6 +179,16 @@ class YuCLIConfigTest {
     }
 
     @Test
+    @DisplayName("Placeholder API key values are treated as not configured")
+    void isConfiguredSecret_rejectsPlaceholderValues() {
+        assertFalse(YuCLIConfig.isConfiguredSecret("your_api_key_here"));
+        assertFalse(YuCLIConfig.isConfiguredSecret("your_deepseek_api_key_here"));
+        assertFalse(YuCLIConfig.isConfiguredSecret("your-key"));
+        assertFalse(YuCLIConfig.isConfiguredSecret("   "));
+        assertTrue(YuCLIConfig.isConfiguredSecret("sk-real-looking-value"));
+    }
+
+    @Test
     @DisplayName("Multiple providers in map: both accessible independently")
     void multipleProviders() {
         YuCLIConfig config = new YuCLIConfig();
