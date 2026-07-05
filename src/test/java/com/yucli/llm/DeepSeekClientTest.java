@@ -43,6 +43,12 @@ class DeepSeekClientTest {
     }
 
     @Test
+    void getApiUrl_withCustomBaseUrl() {
+        DeepSeekClient client = new DeepSeekClient("key", "https://api.example.com/v1", "model");
+        assertEquals("https://api.example.com/v1/chat/completions", client.getApiUrl());
+    }
+
+    @Test
     void getProviderName() {
         DeepSeekClient client = new DeepSeekClient("key");
         assertEquals("deepseek", client.getProviderName());

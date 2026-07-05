@@ -20,9 +20,29 @@ public class LlmClientFactory {
         String baseUrl = config.getBaseUrl(normalized);
 
         return switch (normalized) {
-            case "glm" -> new GLMClient(apiKey, model);
-            case "deepseek" -> new DeepSeekClient(apiKey, model);
+            case "glm" -> new GLMClient(apiKey, baseUrl, model);
+            case "deepseek" -> new DeepSeekClient(apiKey, baseUrl, model);
             case "anthropic" -> new AnthropicClient(baseUrl, apiKey, model);
+            case "openai" -> new OpenAiCompatibleClient(
+                    "openai",
+                    baseUrl,
+                    apiKey,
+                    model,
+                    "https://api.openai.com/v1",
+                    "gpt-4o",
+                    128_000,
+                    false
+            );
+            case "qwen" -> new OpenAiCompatibleClient(
+                    "qwen",
+                    baseUrl,
+                    apiKey,
+                    model,
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                    "qwen3-coder-plus",
+                    1_000_000,
+                    false
+            );
             default -> null;
         };
     }
@@ -33,7 +53,7 @@ public class LlmClientFactory {
             return client;
         }
 
-        for (String provider : new String[]{"anthropic", "glm", "deepseek"}) {
+        for (String provider : new String[]{"anthropic", "glm", "deepseek", "qwen", "openai"}) {
             client = create(provider, config);
             if (client != null) {
                 return client;

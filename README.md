@@ -42,13 +42,29 @@ powershell -ExecutionPolicy Bypass -File install.ps1
       "baseUrl": "https://api.deepseek.com/anthropic",
       "model": "deepseek-v4-pro"
     },
-    "deepseek": { "apiKey": "your-key" },
-    "glm": { "apiKey": "your-key" }
+    "deepseek": {
+      "apiKey": "your-key",
+      "baseUrl": "https://api.deepseek.com",
+      "model": "deepseek-v4-flash"
+    },
+    "glm": { "apiKey": "your-key" },
+    "qwen": {
+      "apiKey": "your-key",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3-coder-plus"
+    },
+    "openai": {
+      "apiKey": "your-key",
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-4o"
+    }
   }
 }
 
 # 方式二：环境变量
 export ANTHROPIC_API_KEY=your-key
+# QWEN_API_KEY=your-key
+# OPENAI_API_KEY=your-key
 ```
 
 ### 运行
@@ -71,8 +87,8 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 - Multi-Agent 协作（`/team`）：规划者 + 执行者 + 检查者
 
 **多模型支持**
-- DeepSeek V4、GLM-5.1、Anthropic Claude
-- 运行时切换：`/model deepseek`、`/model glm`
+- DeepSeek V4、GLM-5.1、Qwen、Anthropic Claude、通用 OpenAI-compatible
+- 运行时切换：`/model deepseek`、`/model glm`、`/model qwen`、`/model openai`
 - Prompt Caching、流式输出、Token 统计
 
 **MCP 协议**
@@ -126,7 +142,7 @@ java -jar target/yucli-19.0.0.jar run "review recent changes" --mode team --json
 | `/hooks` | 查看工具、Prompt 与生命周期 Hooks 状态 |
 | `/plan [任务]` | Plan-and-Execute 模式 |
 | `/team [任务]` | Multi-Agent 协作模式 |
-| `/model <name>` | 切换模型（deepseek/glm/anthropic） |
+| `/model <name>` | 切换模型（anthropic/deepseek/glm/qwen/openai） |
 | `/hitl on\|off` | 启用/关闭人工审批 |
 | `/mcp` | 查看 MCP server 状态 |
 | `/mcp restart\|logs\|disable\|enable <name>` | 管理 MCP server |

@@ -158,7 +158,7 @@ public class Main {
         LlmClient llmClient = LlmClientFactory.createFromConfig(config);
         if (llmClient == null) {
             System.err.println("❌ 错误: 未找到可用的 API Key");
-            System.err.println("请在 .env 文件中添加 ANTHROPIC_API_KEY、GLM_API_KEY 或 DEEPSEEK_API_KEY");
+            System.err.println("请在 .env 文件中添加 ANTHROPIC_API_KEY、GLM_API_KEY、DEEPSEEK_API_KEY、QWEN_API_KEY 或 OPENAI_API_KEY");
             System.exit(1);
         }
 
@@ -576,9 +576,12 @@ public class Main {
                         String provider = command.payload();
                         if (provider == null || provider.isEmpty()) {
                             System.out.println("🤖 当前模型: " + llmClient.getModelName() + " (" + llmClient.getProviderName() + ")");
-                            System.out.println("   可用模型：glm, deepseek");
-                            System.out.println("   /model glm     - 切换到 GLM-5.1");
-                            System.out.println("   /model deepseek - 切换到 DeepSeek V4\n");
+                            System.out.println("   可用模型：anthropic, deepseek, glm, qwen, openai");
+                            System.out.println("   /model anthropic - 切换到 Anthropic Messages 兼容接口");
+                            System.out.println("   /model deepseek  - 切换到 DeepSeek OpenAI 兼容接口");
+                            System.out.println("   /model glm       - 切换到 GLM OpenAI 兼容接口");
+                            System.out.println("   /model qwen      - 切换到 Qwen OpenAI 兼容接口");
+                            System.out.println("   /model openai    - 切换到通用 OpenAI 兼容接口\n");
                         } else {
                             LlmClient newClient = LlmClientFactory.create(provider, config);
                             if (newClient == null) {
@@ -1375,7 +1378,7 @@ public class Main {
     static List<String> startupHints() {
         return List.of(
                 "输入你的问题或任务",
-                "输入 '/model' 查看当前模型，'/model glm' 或 '/model deepseek' 切换模型",
+                "输入 '/model' 查看当前模型，'/model qwen'、'/model deepseek'、'/model glm' 或 '/model openai' 切换模型",
                 "输入 '/plan' 后，下一条任务使用 Plan-and-Execute 模式",
                 "输入 '/plan 任务内容' 直接用计划模式执行这条任务",
                 "输入 '/team' 后，下一条任务使用 Multi-Agent 协作模式",

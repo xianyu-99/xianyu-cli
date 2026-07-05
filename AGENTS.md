@@ -36,12 +36,12 @@
 - Java 17+
 - Maven
 - 可用的默认模型 API Key：`ANTHROPIC_API_KEY`（默认 provider 为 `anthropic`，默认 DeepSeek Anthropic 兼容端点）
-- 可选模型 Key：`GLM_API_KEY`、`DEEPSEEK_API_KEY`
+- 可选模型 Key：`GLM_API_KEY`、`DEEPSEEK_API_KEY`、`QWEN_API_KEY`、`OPENAI_API_KEY`
 
 模型配置当前读取顺序以代码为准：
 
 1. `~/.YuCLI/config.json` 中对应 provider 的 `apiKey` / `model` / `baseUrl`
-2. 环境变量：`ANTHROPIC_API_KEY` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` 等
+2. 环境变量：`ANTHROPIC_API_KEY` / `GLM_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `OPENAI_API_KEY` 等
 3. 仓库当前目录下的 `.env`
 4. 用户主目录下的 `.env`
 
@@ -53,6 +53,12 @@ ANTHROPIC_API_KEY=your_api_key_here
 # ANTHROPIC_MODEL=deepseek-v4-pro
 # GLM_API_KEY=your_api_key_here
 # DEEPSEEK_API_KEY=your_deepseek_api_key_here
+# QWEN_API_KEY=your_qwen_api_key_here
+# QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# QWEN_MODEL=qwen3-coder-plus
+# OPENAI_API_KEY=your_openai_compatible_key_here
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_MODEL=gpt-4o
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text:latest
 EMBEDDING_BASE_URL=http://localhost:11434
@@ -867,11 +873,11 @@ src/main/java/com/yucli
 - `mention/`：解析 `@server:protocol://path`、JLine 候选补全、提交前展开 `<resource>` 块
 - `notifications/NotificationRouter.java`：被动路由 MCP notification，当前处理工具列表变化和 resource cache 失效
 
-### `src/main/java/com/yucli/llm/GLMClient.java`
+### `src/main/java/com/yucli/llm/`
 
-- 当前固定模型：`glm-5.1`
-- 当前固定接口：`https://open.bigmodel.cn/api/coding/paas/v4/chat/completions`
-- 底层默认通过流式接口获取响应，并负责消息、`reasoning_content`、tools、tool_calls、usage 解析
+- `AnthropicClient`：Anthropic Messages wire，默认用于 DeepSeek Anthropic 兼容端点
+- `AbstractOpenAiCompatibleClient`：OpenAI Chat Completions wire 的共用流式解析，负责消息、`reasoning_content`、tools、tool_calls、usage 解析
+- `DeepSeekClient` / `GLMClient` / `OpenAiCompatibleClient`：分别接入 DeepSeek、GLM、Qwen、通用 OpenAI-compatible provider；`*_BASE_URL` 可覆盖默认 endpoint
 
 ### `src/main/resources/logback.xml`
 

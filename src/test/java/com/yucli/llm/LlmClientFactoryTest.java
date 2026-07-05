@@ -64,6 +64,26 @@ class LlmClientFactoryTest {
     }
 
     @Test
+    void create_qwen_returnsOpenAiCompatibleClient() {
+        YuCLIConfig config = configWith("qwen", "qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-max");
+        LlmClient client = LlmClientFactory.create("qwen", config);
+        assertNotNull(client);
+        assertInstanceOf(OpenAiCompatibleClient.class, client);
+        assertEquals("qwen", client.getProviderName());
+        assertEquals("qwen-max", client.getModelName());
+    }
+
+    @Test
+    void create_openai_returnsOpenAiCompatibleClient() {
+        YuCLIConfig config = configWith("openai", "sk-test", "https://api.example.com/v1", "gpt-test");
+        LlmClient client = LlmClientFactory.create("openai", config);
+        assertNotNull(client);
+        assertInstanceOf(OpenAiCompatibleClient.class, client);
+        assertEquals("openai", client.getProviderName());
+        assertEquals("gpt-test", client.getModelName());
+    }
+
+    @Test
     void create_unknownProvider_returnsNull() {
         YuCLIConfig config = configWith("unknown", "key", "model");
         assertNull(LlmClientFactory.create("unknown", config));

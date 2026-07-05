@@ -5,6 +5,7 @@ public class GLMClient extends AbstractOpenAiCompatibleClient {
     private static final String API_URL = "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions";
     private static final String DEFAULT_MODEL = "glm-5.1";
     private final String apiKey;
+    private final String apiUrl;
     private final String model;
 
     public GLMClient(String apiKey) {
@@ -12,13 +13,18 @@ public class GLMClient extends AbstractOpenAiCompatibleClient {
     }
 
     public GLMClient(String apiKey, String model) {
+        this(apiKey, null, model);
+    }
+
+    public GLMClient(String apiKey, String baseUrl, String model) {
         this.apiKey = apiKey;
+        this.apiUrl = OpenAiCompatibleClient.buildChatCompletionsUrl(baseUrl, API_URL);
         this.model = model != null && !model.isBlank() ? model : DEFAULT_MODEL;
     }
 
     @Override
     protected String getApiUrl() {
-        return API_URL;
+        return apiUrl;
     }
 
     @Override

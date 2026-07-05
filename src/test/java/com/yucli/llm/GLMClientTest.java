@@ -43,6 +43,12 @@ class GLMClientTest {
     }
 
     @Test
+    void getApiUrl_withCustomBaseUrl() {
+        GLMClient client = new GLMClient("key", "https://open.bigmodel.cn/api/paas/v4", "model");
+        assertEquals("https://open.bigmodel.cn/api/paas/v4/chat/completions", client.getApiUrl());
+    }
+
+    @Test
     void getProviderName() {
         GLMClient client = new GLMClient("key");
         assertEquals("glm", client.getProviderName());
